@@ -64,8 +64,8 @@ export default function App() {
     if (pending) { saveInvite(pending); setInvite(pending); }
     restore().then(({ user }) => { if (active) setUser(user); }).catch(e => {
       if (active && !(e instanceof ApiError && e.status === 401)) setError(message(e));
-      // A visitor without an account must sign up (or log in) before entering the invited quiz room.
-      if (active && pending && !verifying) setAuthMode('register');
+      // A player who already has an account logs in and lands directly in the room; newcomers switch to sign up in one click.
+      if (active && pending && !verifying) setAuthMode('login');
     }).finally(() => { if (active) setInitializing(false); });
     const expired = () => { setUser(null); setGameId(null); setAuthMode('login'); setError('Votre session a expiré. Reconnectez-vous.'); };
     window.addEventListener('auth:expired', expired);

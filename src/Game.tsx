@@ -89,7 +89,7 @@ export function Game({ id, user, exit, complete, invitationCode }: { id: string;
   const review = state.state === 'review';
   const isPlayer = state.players.some(p => p.id === user.id);
   return <div className="game-page">
-    <div className="game-toolbar"><button className="text-button" onClick={exit}><ArrowLeft size={17} />Quitter la salle</button>
+    <div className="game-toolbar"><button className="text-button quit-button" onClick={exit}><ArrowLeft size={17} />Quitter la salle</button>
       <span className={`connection ${connected ? '' : 'offline'}`}>{connected ? <Wifi size={15} /> : <WifiOff size={15} />}{connected ? 'Connecté en temps réel' : 'Actualisation automatique'}</span></div>
     <div className="page-heading"><div><div className="eyebrow dark">{state.mode === 'live' ? <Radio size={15} /> : <Clock3 size={15} />}{state.mode === 'live' ? 'QUIZ EN DIRECT' : 'À VOTRE RYTHME'}</div><h1>{state.title}</h1></div>
       <button className="button secondary" onClick={() => setSharing(open => !open)} aria-expanded={sharing}><Copy size={16} />Inviter un ami</button></div>
@@ -100,9 +100,13 @@ export function Game({ id, user, exit, complete, invitationCode }: { id: string;
     {error && <div className="alert error" role="alert">{error}</div>}
     {connectionError && <div className="alert error" role="alert">Connexion interrompue : {connectionError} Nouvelle tentative automatique…</div>}
     <div className="game-layout"><section className="game-panel">
-      {state.state === 'waiting' ? <div className="waiting-room"><span className="waiting-icon"><Radio size={42} /></span><span className="pill">SALLE D’ATTENTE</span><h2>On se retrouve tous ici.</h2><p>{state.host ? 'Vos joueurs sont prêts ? Lancez le quiz : tout le monde recevra la même question au même moment.' : 'Installez-vous ! L’animateur lancera le quiz dès que tout le monde sera prêt.'}</p>
+      {state.state === 'waiting' ? <div className="waiting-room"><span className="waiting-icon"><Radio size={42} /></span><span className="pill">SALLE D’ATTENTE</span><h2>On se retrouve tous ici.</h2><p>{
+        state.mode === 'async'
+          ? isPlayer ? 'Installez-vous ! Cliquez sur « Commencez le quiz » : votre chronomètre démarre à ce moment-là.' : 'Chaque joueur lance le quiz quand il est prêt, à son rythme.'
+          : state.host ? 'Vos joueurs sont prêts ? Lancez le quiz : tout le monde recevra la même question au même moment.' : 'Installez-vous ! L’animateur lancera le quiz dès que tout le monde sera prêt.'}</p>
         <div className="waiting-avatars">{state.players.filter(p => !p.excluded).slice(0, 8).map(p => <Avatar key={p.id} user={p} />)}</div><span className="small-note">{state.players.filter(p => !p.excluded).length} joueur(s) dans la salle</span>
-        {state.host && <button className="button orange" disabled={busy} onClick={() => action('control', { action: 'start' })}>Lancer la partie<ArrowRight size={17} /></button>}
+        {state.host && state.mode === 'live' && <button className="button orange" disabled={busy} onClick={() => action('control', { action: 'start' })}>Commencez le quiz<ArrowRight size={17} /></button>}
+        {state.mode === 'async' && isPlayer && <button className="button orange" disabled={busy} onClick={() => action('start')}>Commencez le quiz<ArrowRight size={17} /></button>}
       </div> : finished ? <div className="final-result"><div className="final-trophy"><Trophy size={56} /></div><span className="pill">DÉFI TERMINÉ</span><h2>{isPlayer ? 'Bien joué, ' + user.pseudo + ' !' : 'Merci pour cette belle partie !'}</h2><p>Une nouvelle étape dans votre aventure.</p>
         {isPlayer && <><div className="final-score">{number(state.score)}<span>points sur {number(1000)}</span></div><div className="result-summary"><span><Flag size={17} />{state.total} question{state.total > 1 ? 's' : ''}</span><span><Trophy size={17} />{state.players.findIndex(p => p.id === user.id) + 1}{state.players.findIndex(p => p.id === user.id) === 0 ? 'er' : 'e'} du classement</span></div></>}
         <button className="button secondary" disabled={downloading} onClick={() => void download()}><Download size={17} />{downloading ? 'Préparation du PDF…' : 'Télécharger le relevé PDF'}</button>

@@ -1,6 +1,6 @@
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { ArrowRight, ArrowLeft, Mail, LockKeyhole, UserRound, CheckCircle2, Eye, EyeOff } from 'lucide-react';
-import { api, message, setToken, type PendingInvite } from './api';
+import { api, ApiError, message, setToken, type PendingInvite } from './api';
 import { AnimatedBanner, Modal } from './components';
 import type { User } from './types';
 
@@ -18,10 +18,15 @@ export function Auth({ initial = 'login', token, invite, close, onLogin }: {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const [knownEmail, setKnownEmail] = useState(false);
+  const [providers, setProviders] = useState<{ google: boolean; apple: boolean }>({ google: false, apple: false });
+  useEffect(() => {
+    fetch('/api/auth/providers').then(r => r.ok ? r.json() : null).then(value => { if (value) setProviders(value); }).catch(() => {});
+  }, []);
   const titles = { login: 'Ravi de vous retrouver', register: 'L’aventure commence ici', forgot: 'Mot de passe oublié', resend: 'Vérifier mon email', reset: 'Un nouveau départ', verify: 'Vérification de votre email' };
-  function change(next: AuthMode) { setMode(next); setShowPassword(false); setError(''); setSuccess(''); }
+  function change(next: AuthMode) { setMode(next); setShowPassword(false); setError(''); setSuccess(''); setKnownEmail(false); }
   async function submit(e: FormEvent) {
-    e.preventDefault(); setBusy(true); setError(''); setSuccess('');
+    e.preventDefault(); setBusy(true); setError(''); setSuccess(''); setKnownEmail(false);
     try {
       if (mode === 'login') {
         const result = await api<{ token: string; user: User }>('/auth/login', 'POST', { email, password });
@@ -33,7 +38,11 @@ export function Auth({ initial = 'login', token, invite, close, onLogin }: {
         if (mode === 'verify') { setMode('login'); setPassword(''); }
         setSuccess(result.message);
       }
-    } catch (e) { setError(message(e)); }
+    } catch (e) {
+      // This email is already registered: offer a one-click switch to the login form, keeping the address.
+      if (mode === 'register' && e instanceof ApiError && e.status === 409) setKnownEmail(true);
+      setError(message(e));
+    }
     finally { setBusy(false); }
   }
   return <Modal title={titles[mode]} close={close}>
@@ -43,17 +52,22 @@ export function Auth({ initial = 'login', token, invite, close, onLogin }: {
     <form onSubmit={submit} className="form">
       {mode === 'register' && <label>Votre pseudo<div className="input-wrap"><UserRound size={17} /><input required minLength={2} maxLength={30} value={pseudo} onChange={e => setPseudo(e.target.value)} placeholder="Comment vous appelle-t-on ?" autoComplete="nickname" /></div></label>}
       {!['verify', 'reset'].includes(mode) && <label>Adresse email<div className="input-wrap"><Mail size={17} /><input required type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="vous@exemple.fr" autoComplete="email" /></div></label>}
-      {['login', 'register', 'reset'].includes(mode) && <label>Mot de passe<div className="input-wrap"><LockKeyhole size={17} /><input className="password-input" required type={showPassword ? 'text' : 'password'} minLength={mode === 'login' ? 1 : 10} maxLength={72} value={password} onChange={e => setPassword(e.target.value)} placeholder={mode === 'login' ? 'Votre mot de passe' : '10 caractères minimum'} autoComplete={mode === 'login' ? 'current-password' : 'new-password'} />
+      {['login', 'register', 'reset'].includes(mode) && <label>Mot de passe<div className="input-wrap"><LockKeyhole size={17} /><input className="password-input" required type={showPassword ? 'text' : 'password'} minLength={mode === 'login' ? 1 : 8} maxLength={72} value={password} onChange={e => setPassword(e.target.value)} placeholder={mode === 'login' ? 'Votre mot de passe' : '8 caractères minimum (fort)'} autoComplete={mode === 'login' ? 'current-password' : 'new-password'} />
         <button type="button" className="icon-button password-toggle" onClick={() => setShowPassword(visible => !visible)} aria-label={showPassword ? 'Masquer le mot de passe' : 'Afficher le mot de passe'} aria-pressed={showPassword}>
           {showPassword ? <EyeOff size={18} aria-hidden="true" /> : <Eye size={18} aria-hidden="true" />}
         </button></div></label>}
       {mode === 'register' && <label>Je souhaite<select value={role} onChange={e => setRole(e.target.value)}><option value="player">Jouer et apprendre</option><option value="creator">Créer et animer des quiz</option></select></label>}
-      {error && <div className="alert error" role="alert">{error}</div>}
+      {error && <div className="alert error" role="alert">{error}{knownEmail && <> <button type="button" className="text-button" onClick={() => change('login')}>Se connecter avec cette adresse</button></>}</div>}
       {success && <div className="alert success" role="status"><CheckCircle2 size={18} />{success}</div>}
       {mode === 'verify' && !success && <p>Confirmez votre adresse email pour activer votre compte.</p>}
       <button className="button orange full" disabled={busy || !!success && mode === 'verify'}>
         {busy ? 'Un instant…' : mode === 'login' ? 'Se connecter' : mode === 'register' ? 'Créer mon compte' : mode === 'verify' ? 'Vérifier mon email' : mode === 'reset' ? 'Modifier le mot de passe' : 'Envoyer le lien'}<ArrowRight size={17} />
       </button>
+      {(providers.google || providers.apple) && ['login', 'register'].includes(mode) && <div className="oauth-buttons">
+        <span className="oauth-divider">ou</span>
+        {providers.google && <a className="oauth-button" href="/api/auth/oauth/google">Continuer avec Google</a>}
+        {providers.apple && <a className="oauth-button" href="/api/auth/oauth/apple">Continuer avec Apple</a>}
+      </div>}
     </form>
     {mode === 'login' && <><div className="auth-links"><button onClick={() => change('forgot')}>Mot de passe oublié ?</button><button onClick={() => change('resend')}>Email non reçu ?</button></div>
       <div className="demo-box"><strong>Découvrir avec un compte de démonstration</strong><div>{[['Joueur', 'alex'], ['Créatrice', 'camille'], ['Admin', 'admin']].map(([label, name]) =>

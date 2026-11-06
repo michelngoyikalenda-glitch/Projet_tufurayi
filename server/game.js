@@ -132,10 +132,23 @@ export function createGame(db, { clock = Date.now } = {}) {
         assert(session.mode !== 'live' || session.status === 'waiting', 409, 'La partie a déjà commencé. Les nouveaux joueurs ne peuvent plus entrer.');
         const order = session.mode === 'live' ? JSON.parse(session.question_order) : shuffle(JSON.parse(session.question_order));
         const pId = randomUUID();
-        await tx.query('INSERT INTO participations (id,session_id,user_id,question_order,started_at) VALUES (?,?,?,?,?)',
-          [pId, id, user.id, JSON.stringify(order), session.mode === 'async' ? clock() : null]);
+        // En mode différé, le chronomètre du joueur ne démarre qu’avec le bouton « Commencez le quiz ».
+        await tx.query('INSERT INTO participations (id,session_id,user_id,status,question_order) VALUES (?,?,?,?,?)',
+          [pId, id, user.id, session.mode === 'async' ? 'waiting' : 'playing', JSON.stringify(order)]);
         await tx.query("UPDATE invitations SET status='accepted' WHERE session_id=? AND email=?", [id, user.email]);
         return pId;
+      });
+    },
+    async begin(id, user) {
+      return db.transaction(async tx => {
+        const { session } = await load(tx, id);
+        await notExcluded(tx, id, user.id);
+        assert(session.mode === 'async', 400, 'Cette session se joue en direct : l’animateur lance la partie pour tout le monde.');
+        assert(session.status !== 'ended' && clock() < Number(session.closes_at), 409, 'Cette session est terminée.');
+        assert(clock() >= Number(session.opens_at), 409, 'Cette session n’est pas encore ouverte.');
+        const [p] = await tx.query('SELECT * FROM participations WHERE session_id=? AND user_id=?', [id, user.id]);
+        assert(p, 403, 'Rejoignez la session avant de commencer le quiz.');
+        if (p.status === 'waiting') await tx.query("UPDATE participations SET status='playing',started_at=? WHERE id=?", [clock(), p.id]);
       });
     },
     async control(id, user, action) {
@@ -166,6 +179,7 @@ export function createGame(db, { clock = Date.now } = {}) {
         const [p] = await tx.query('SELECT * FROM participations WHERE session_id=? AND user_id=?', [id, user.id]);
         assert(p && p.status !== 'finished', 409, 'Aucune participation active.');
         assert(clock() < Number(session.closes_at), 409, 'La session est fermée.');
+        assert(session.mode !== 'async' || p.status !== 'waiting', 409, 'Cliquez sur « Commencez le quiz » pour démarrer la partie.');
         assert(session.mode === 'async' ? p.status === 'playing' : session.status === 'question', 409, 'Le temps de réponse est écoulé.');
         const q = await currentQuestion(tx, session, p);
         assert(q.id === questionId, 409, 'Cette question n’est plus active.');

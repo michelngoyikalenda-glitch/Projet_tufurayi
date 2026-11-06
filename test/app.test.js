@@ -95,6 +95,14 @@ test('auth : protections, mot de passe et email vérifié obligatoire', async ()
   assert.equal((await request('/auth/register', { method: 'POST', body: { email: 'bad', password: 'short', pseudo: 'X' } })).status, 400);
   assert.equal((await request('/auth/register', { method: 'POST', body: { email: 'long@test.fr', password: 'é'.repeat(40), pseudo: 'Trop long' } })).status, 400);
   assert.equal((await request('/auth/register', { method: 'POST', body: { email: 'admin-test@test.fr', password: 'TestPassword2026!', pseudo: 'Admin', role: 'admin' } })).status, 400);
+  const fort = `${prefix}-fort@test.fr`;
+  assert.equal((await request('/auth/register', { method: 'POST', body: { email: fort, password: 'Fort1234', pseudo: 'Fort' } })).status, 201);
+  userIds.push((await db.query('SELECT id FROM users WHERE email=?', [fort]))[0].id);
+  assert.equal((await request('/auth/register', { method: 'POST', body: { email: `${prefix}-faible@test.fr`, password: 'motdepasse', pseudo: 'Faible' } })).status, 400);
+  assert.equal((await request('/auth/register', { method: 'POST', body: { email: `${prefix}-court@test.fr`, password: 'Fort123', pseudo: 'Court' } })).status, 400);
+  assert.deepEqual((await request('/auth/providers')).body, { google: false, apple: false });
+  assert.equal((await request('/auth/oauth/google')).status, 503);
+  assert.equal((await request('/auth/oauth/apple')).status, 503);
   const email = `${prefix}-non-verifie@test.fr`;
   assert.equal((await request('/auth/register', { method: 'POST', body: { email, password: 'TestPassword2026!', pseudo: 'Non vérifié' } })).status, 201);
   const [user] = await db.query('SELECT id FROM users WHERE email=?', [email]); userIds.push(user.id);
@@ -148,13 +156,17 @@ test('différé : participation unique, réponses masquées, reprise, correction
   const { id } = await fixture();
   const first = await request(`/sessions/${id}/join`, { method: 'POST', token: player.token, body: {} });
   assert.equal(first.status, 200);
-  assert.equal(first.body.state, 'playing');
-  assert.equal(first.body.question.answers.some(a => 'correct' in a), false);
-  assert.equal(first.body.question.explanation, undefined);
-  const qid = first.body.question.id;
+  assert.equal(first.body.state, 'waiting');
+  assert.equal(first.body.question, null);
+  const begun = await request(`/sessions/${id}/start`, { method: 'POST', token: player.token, body: {} });
+  assert.equal(begun.status, 200);
+  assert.equal(begun.body.state, 'playing');
+  assert.equal(begun.body.question.answers.some(a => 'correct' in a), false);
+  assert.equal(begun.body.question.explanation, undefined);
+  const qid = begun.body.question.id;
   const again = await request(`/sessions/${id}/join`, { method: 'POST', token: player.token, body: {} });
   assert.equal(again.body.question.id, qid);
-  assert.deepEqual(again.body.question.answers, first.body.question.answers);
+  assert.deepEqual(again.body.question.answers, begun.body.question.answers);
   assert.equal((await db.query('SELECT id FROM participations WHERE session_id=? AND user_id=?', [id, player.id])).length, 1);
   const answerId = await correctAnswer(qid);
   clock += 1000;
@@ -187,7 +199,8 @@ test('différé : participation unique, réponses masquées, reprise, correction
 
 test('différé : temps écoulé pendant une déconnexion, aucune réponse tardive récompensée', async () => {
   const { id } = await fixture();
-  const start = await request(`/sessions/${id}/join`, { method: 'POST', token: stranger.token, body: {} });
+  await request(`/sessions/${id}/join`, { method: 'POST', token: stranger.token, body: {} });
+  const start = await request(`/sessions/${id}/start`, { method: 'POST', token: stranger.token, body: {} });
   clock += 5000;
   const answer = await request(`/sessions/${id}/answer`, { method: 'POST', token: stranger.token, body: { questionId: start.body.question.id, answerId: await correctAnswer(start.body.question.id) } });
   assert.equal(answer.body.points, 0);
@@ -240,6 +253,7 @@ test('direct : synchronisation, non-divulgation des scores, deadline, classement
 test('concurrence : une seule réponse prise en compte', async () => {
   const { id } = await fixture();
   await service.game.join(id, player);
+  await service.game.begin(id, player);
   const start = await service.game.snapshot(id, player), qid = start.question.id, answerId = await correctAnswer(qid);
   const results = await Promise.allSettled([service.game.answer(id, player, answerId, qid), service.game.answer(id, player, answerId, qid)]);
   assert.equal(results.filter(r => r.status === 'fulfilled').length, 1);
@@ -252,6 +266,7 @@ test('scores sur 1000 : limites, arrondis, anciens résultats et cumul de plusie
     const { id, quiz } = await fixture(mode, 'public', [], 3);
     await service.game.join(id, participant);
     if (mode === 'live') await service.game.control(id, owner, 'start');
+    else await service.game.begin(id, participant);
     let contributions = 0;
     for (let index = 0; index < 3; index++) {
       const current = await service.game.snapshot(id, participant);
@@ -286,6 +301,7 @@ test('scores sur 1000 : limites, arrondis, anciens résultats et cumul de plusie
   }
   const { id } = await fixture('async', 'public', [], 1);
   await service.game.join(id, participant);
+  await service.game.begin(id, participant);
   const start = await service.game.snapshot(id, participant);
   await service.game.answer(id, participant, await correctAnswer(start.question.id), start.question.id);
   await service.game.next(id, participant);
@@ -302,6 +318,8 @@ test('invitations privées et code : aucun accès non autorisé, accès durable 
   const coded = await fixture('async', 'invitation');
   await assert.rejects(service.game.join(coded.id, player, 'FAUX'), e => e.status === 403 && /code d’invitation/i.test(e.message));
   await service.game.join(coded.id, player, coded.quiz.invitation_code);
+  assert.equal((await service.game.snapshot(coded.id, player)).state, 'waiting');
+  await service.game.begin(coded.id, player);
   assert.equal((await service.game.snapshot(coded.id, player)).state, 'playing');
   const listing = await request('/sessions', { token: player.token });
   assert.equal(listing.body.find(s => s.id === coded.id).invitation_code, null);
@@ -346,6 +364,7 @@ test('exclusion : autorisations, salle d’attente, retour bloqué et autres ses
   await assert.rejects(recreated.join(id, player), error => error.code === 'SESSION_EXCLUDED');
   const other = await fixture();
   await service.game.join(other.id, player);
+  await service.game.begin(other.id, player);
   assert.equal((await service.game.snapshot(other.id, player)).state, 'playing');
 });
 
@@ -355,6 +374,7 @@ test('exclusion : résultats conservés en cours de jeu et après la fin, en dir
       const { id } = await fixture(mode);
       await service.game.join(id, player);
       if (mode === 'live') await service.game.control(id, owner, 'start');
+      else await service.game.begin(id, player);
       const start = await service.game.snapshot(id, player);
       await service.game.answer(id, player, await correctAnswer(start.question.id), start.question.id);
       if (completed) {
@@ -403,6 +423,7 @@ test('sessions : plage de dates et expiration globale', async () => {
 test('reprise après recréation du moteur : état et deadline persistants', async () => {
   const { id } = await fixture();
   await service.game.join(id, player);
+  await service.game.begin(id, player);
   const previous = await service.game.snapshot(id, player);
   const recreated = createGame(db, { clock: () => clock });
   const resumed = await recreated.snapshot(id, player);
@@ -421,6 +442,7 @@ test('statistiques et modération : accès créateur et administrateur', async (
   const [administrator] = await db.query('SELECT * FROM users WHERE id=?', [owner.id]);
   await db.query("UPDATE users SET role='admin' WHERE id=?", [owner.id]);
   await service.game.join(id, owner);
+  await service.game.begin(id, owner);
   const data = await request('/admin', { token: owner.token });
   const adminSession = data.body.sessions.find(s => s.id === id);
   assert.ok(adminSession);

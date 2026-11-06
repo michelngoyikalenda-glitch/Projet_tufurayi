@@ -60,6 +60,10 @@ export function createApp(db, secret, options = {}) {
   app.post('/api/auth/resend', (req, res) => auth.requestLink(req, res, 'verify'));
   app.post('/api/auth/verify', (req, res) => auth.redeem(req, res, 'verify'));
   app.post('/api/auth/reset', (req, res) => auth.redeem(req, res, 'reset'));
+  app.get('/api/auth/providers', (_req, res) => res.json(auth.oauthProviders()));
+  app.get('/api/auth/oauth/:provider', (req, res) => auth.oauthStart(req, res));
+  app.get('/api/auth/oauth/:provider/callback', (req, res) => auth.oauthCallback(req, res));
+  app.post('/api/auth/oauth/:provider/callback', express.urlencoded({ limit: '8kb' }), (req, res) => auth.oauthCallback(req, res));
   app.use('/api', auth.middleware, playLimit);
   app.get('/api/me', (req, res) => res.json(safeUser(req.user)));
   app.put('/api/me', async (req, res) => {
@@ -215,6 +219,12 @@ export function createApp(db, secret, options = {}) {
     res.json(await game.snapshot(id, req.user));
   });
   app.get('/api/sessions/:id', async (req, res) => res.json(await game.snapshot(getId(req), req.user)));
+  app.post('/api/sessions/:id/start', async (req, res) => {
+    const id = getId(req);
+    await game.begin(id, req.user);
+    await notify(id);
+    res.json(await game.snapshot(id, req.user));
+  });
   app.post('/api/sessions/:id/answer', async (req, res) => {
     const { answerId, questionId } = z.object({ answerId: z.uuid(), questionId: z.uuid() }).parse(req.body);
     const id = getId(req);

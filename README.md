@@ -91,6 +91,24 @@ Ne réutilisez pas les mots de passe d’exemple. Encodez les caractères spéci
 
 En local, les liens de vérification/réinitialisation sont affichés **dans le terminal du serveur**, pas dans la réponse API. Configurez `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS` et `MAIL_FROM` pour envoyer de vrais emails. Les invitations sont affichées dans l’application, sans notification email dédiée.
 
+## Connexion Google et Apple
+
+Les boutons « Continuer avec Google » et « Continuer avec Apple » apparaissent sur l’écran de connexion dès que les identifiants correspondants sont configurés dans `.env` :
+
+```dotenv
+# Google Cloud Console → Identifiants → ID client OAuth (application Web)
+GOOGLE_CLIENT_ID=...
+GOOGLE_CLIENT_SECRET=...
+
+# Apple Developer → Identifiers → Services ID + clé Sign in with Apple
+APPLE_CLIENT_ID=...
+APPLE_TEAM_ID=...
+APPLE_KEY_ID=...
+APPLE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----" # \n conservés sur une ligne
+```
+
+Déclarez l’URL de redirection `APP_URL/api/auth/oauth/google/callback` (respectivement `.../apple/callback`) chez chaque fournisseur. Un compte existant est retrouvé par son adresse email ; sinon un compte joueur vérifié est créé automatiquement.
+
 En production :
 
 1. Définir `NODE_ENV=production`, `APP_URL=https://votre-domaine`, `JWT_SECRET` aléatoire (au moins 32 caractères), SMTP et `DATABASE_URL`.
@@ -101,7 +119,7 @@ En production :
 
 Sans secret configuré en développement, le serveur génère un secret dans `data/auth-secret`. Ne jamais publier ce fichier, `.env` ou les données de comptes.
 
-OAuth Google/Microsoft, avatars téléversés vers S3/Cloudinary, équipes/groupes et notifications email d’invitation ne sont **pas implémentés**. Le MVP fixe une tentative par session. Les badges sont calculés, sans table de récompenses indépendante. Cette base nécessite une qualification de déploiement avant une utilisation publique.
+OAuth Microsoft, avatars téléversés vers S3/Cloudinary, équipes/groupes et notifications email d’invitation ne sont **pas implémentés**. Le MVP fixe une tentative par session. Les badges sont calculés, sans table de récompenses indépendante. Cette base nécessite une qualification de déploiement avant une utilisation publique.
 
 ## Vérifications
 

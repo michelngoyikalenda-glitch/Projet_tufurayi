@@ -1,4 +1,4 @@
-import { randomBytes, createHash, randomUUID } from 'node:crypto';
+import { randomBytes, createHash, randomUUID, createPublicKey } from 'node:crypto';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
@@ -13,8 +13,10 @@ export const hashToken = (token) => createHash('sha256').update(token).digest('h
 export const safeUser = ({ id, email, pseudo, role, avatar, verified }) => ({ id, email, pseudo, role, avatar, verified: Boolean(verified) });
 export const emailSchema = z.string().trim().pipe(z.email().max(254)).transform(v => v.toLowerCase());
 const bcryptLimit = value => Buffer.byteLength(value, 'utf8') <= 72;
-export const passwordSchema = z.string().min(10, 'Le mot de passe doit contenir au moins 10 caractères.').max(72)
-  .refine(bcryptLimit, 'Le mot de passe doit tenir dans 72 octets UTF-8.');
+export const passwordSchema = z.string().min(8, 'Le mot de passe doit contenir au moins 8 caractères.').max(72)
+  .refine(bcryptLimit, 'Le mot de passe doit tenir dans 72 octets UTF-8.')
+  .refine(value => /[a-z]/.test(value) && /[A-Z]/.test(value) && /\d/.test(value),
+    'Choisissez un mot de passe fort : au moins une majuscule, une minuscule et un chiffre.');
 
 export async function getSecret() {
   if (process.env.JWT_SECRET) {
@@ -77,6 +79,70 @@ export function createAuth(db, secret, { mailer, origin = process.env.APP_URL ||
     try { req.user = await authenticate(req.headers.authorization?.replace(/^Bearer /, '')); next(); }
     catch (error) { next(error); }
   };
+  async function postForm(url, params) {
+    const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams(params) });
+    assert(response.ok, 502, 'Le fournisseur de connexion n’a pas répondu. Réessayez.');
+    return response.json();
+  }
+  function appleClientSecret() {
+    const key = process.env.APPLE_PRIVATE_KEY.replace(/\\n/g, '\n');
+    return jwt.sign({}, key, { algorithm: 'ES256', keyid: process.env.APPLE_KEY_ID,
+      issuer: process.env.APPLE_TEAM_ID, subject: process.env.APPLE_CLIENT_ID, audience: 'https://appleid.apple.com', expiresIn: '5m' });
+  }
+  async function applePayload(idToken) {
+    const header = JSON.parse(Buffer.from(idToken.split('.')[0], 'base64url').toString());
+    const keys = await fetch('https://appleid.apple.com/auth/keys').then(r => r.json());
+    const jwk = keys.keys.find(k => k.kid === header.kid);
+    assert(jwk, 502, 'La clé de signature Apple est introuvable.');
+    return jwt.verify(idToken, createPublicKey({ key: jwk, format: 'jwk' }),
+      { algorithms: ['ES256'], audience: process.env.APPLE_CLIENT_ID, issuer: 'https://appleid.apple.com' });
+  }
+  const oauth = {
+    google: {
+      label: 'Google',
+      configured: () => Boolean(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET),
+      authorize(redirectUri, state) {
+        const url = new URL('https://accounts.google.com/o/oauth2/v2/auth');
+        url.searchParams.set('client_id', process.env.GOOGLE_CLIENT_ID);
+        url.searchParams.set('redirect_uri', redirectUri);
+        url.searchParams.set('response_type', 'code');
+        url.searchParams.set('scope', 'openid email profile');
+        url.searchParams.set('state', state);
+        return url.toString();
+      },
+      async profile(code, redirectUri) {
+        const token = await postForm('https://oauth2.googleapis.com/token', { code, client_id: process.env.GOOGLE_CLIENT_ID,
+          client_secret: process.env.GOOGLE_CLIENT_SECRET, redirect_uri: redirectUri, grant_type: 'authorization_code' });
+        const response = await fetch('https://openidconnect.googleapis.com/v1/userinfo', { headers: { Authorization: `Bearer ${token.access_token}` } });
+        assert(response.ok, 502, 'Google n’a pas renvoyé votre profil.');
+        const profile = await response.json();
+        assert(profile.email && profile.email_verified, 403, 'Google n’a pas confirmé votre adresse email.');
+        return { email: String(profile.email).toLowerCase(), name: String(profile.name || '') };
+      }
+    },
+    apple: {
+      label: 'Apple',
+      configured: () => Boolean(process.env.APPLE_CLIENT_ID && process.env.APPLE_TEAM_ID && process.env.APPLE_KEY_ID && process.env.APPLE_PRIVATE_KEY),
+      authorize(redirectUri, state) {
+        const url = new URL('https://appleid.apple.com/auth/authorize');
+        url.searchParams.set('client_id', process.env.APPLE_CLIENT_ID);
+        url.searchParams.set('redirect_uri', redirectUri);
+        url.searchParams.set('response_type', 'code');
+        url.searchParams.set('response_mode', 'form_post');
+        url.searchParams.set('scope', 'name email');
+        url.searchParams.set('state', state);
+        return url.toString();
+      },
+      async profile(code, redirectUri) {
+        const token = await postForm('https://appleid.apple.com/auth/token', { code, client_id: process.env.APPLE_CLIENT_ID,
+          client_secret: appleClientSecret(), redirect_uri: redirectUri, grant_type: 'authorization_code' });
+        const payload = await applePayload(token.id_token);
+        assert(payload.email && payload.email_verified !== false && payload.email_verified !== 'false', 403, 'Apple n’a pas confirmé votre adresse email.');
+        return { email: String(payload.email).toLowerCase(), name: '' };
+      }
+    }
+  };
+  const oauthRedirectUri = provider => `${origin}/api/auth/oauth/${provider}/callback`;
   return {
     authenticate, middleware, access, sendLink,
     async register(req, res) {
@@ -131,6 +197,44 @@ export function createAuth(db, secret, { mailer, origin = process.env.APP_URL ||
         await tx.query("DELETE FROM auth_tokens WHERE user_id=? AND (kind=? OR kind='refresh')", [saved.user_id, kind]);
       });
       res.json({ message: kind === 'verify' ? 'Email vérifié. Vous pouvez vous connecter.' : 'Mot de passe modifié. Reconnectez-vous.' });
+    },
+    oauthProviders: () => ({ google: oauth.google.configured(), apple: oauth.apple.configured() }),
+    oauthStart(req, res) {
+      const provider = z.enum(['google', 'apple']).parse(req.params.provider);
+      const conf = oauth[provider];
+      assert(conf.configured(), 503, `La connexion ${conf.label} n’est pas encore configurée.`);
+      const state = jwt.sign({ p: provider, nonce: randomBytes(16).toString('hex') }, secret,
+        { expiresIn: '10m', issuer: 'tufurayi', audience: 'tufurayi-oauth' });
+      res.redirect(conf.authorize(oauthRedirectUri(provider), state));
+    },
+    async oauthCallback(req, res) {
+      const provider = z.enum(['google', 'apple']).parse(req.params.provider);
+      const conf = oauth[provider];
+      assert(conf.configured(), 503, `La connexion ${conf.label} n’est pas encore configurée.`);
+      const { code, state } = z.object({ code: z.string().min(10).max(4096), state: z.string().min(10).max(2048) })
+        .parse({ code: req.query.code ?? req.body?.code, state: req.query.state ?? req.body?.state });
+      let payload;
+      try { payload = jwt.verify(state, secret, { issuer: 'tufurayi', audience: 'tufurayi-oauth' }); }
+      catch { throw new HttpError(400, 'Cette connexion a expiré. Recommencez.'); }
+      assert(payload.p === provider, 400, 'Requête de connexion invalide.');
+      const profile = await conf.profile(code, oauthRedirectUri(provider));
+      const user = await db.transaction(async tx => {
+        const [existing] = await tx.query(`SELECT * FROM users WHERE email=?${tx.lock}`, [profile.email]);
+        if (existing) {
+          assert(!existing.disabled, 403, 'Ce compte est désactivé.');
+          // Le fournisseur a confirmé l’adresse : un compte pas encore vérifié devient vérifié.
+          if (!existing.verified) { await tx.query('UPDATE users SET verified=1 WHERE id=?', [existing.id]); existing.verified = 1; }
+          return existing;
+        }
+        const name = profile.name.trim().slice(0, 30) || profile.email.split('@')[0].slice(0, 30);
+        const created = { id: randomUUID(), email: profile.email, pseudo: name.length >= 2 ? name : 'Joueur',
+          role: 'player', avatar: 'indigo', verified: 1, token_version: 0 };
+        await tx.query('INSERT INTO users (id,email,password_hash,pseudo,role,verified,created_at) VALUES (?,?,?,?,?,1,?)',
+          [created.id, created.email, await bcrypt.hash(randomBytes(32).toString('hex'), 12), created.pseudo, created.role, Date.now()]);
+        return created;
+      });
+      await issue(res, user);
+      res.redirect(origin);
     }
   };
 }

@@ -25,7 +25,7 @@ export type Statistics = { questions: { id: string; text: string; responses: num
   players: { pseudo: string; score: number; status: string; mode: string }[] };
 export type AdminData = { users: (User & { disabled: boolean })[]; reports: { id: string; title: string; pseudo: string; reason: string; status: string }[];
   sessions: { id: string; title: string; mode: 'live' | 'async'; status: string; created_at: number; opens_at: number; closes_at: number;
-    owner_id: string; owner: string; player_count: number; participation_status: string | null }[];
+    owner_id: string; owner: string; player_count: number; pending_access_count: number; participation_status: string | null }[];
   totals: { quizzes: number; sessions: number; participations: number } };
 export type CollectiveReport = {
   id: string; title: string; category: string; mode: 'live' | 'async'; status: string; created_at: number; question_count: number;

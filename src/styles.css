@@ -682,6 +682,106 @@ td select,
 .session-invitation label { display: grid; gap: 5px; font-size: 11px; }
 .session-invitation input { font-size: 12px; }
 .session-invitation .text-button { justify-self: start; }
+.app-shell { min-height: 100dvh; }
+.sidebar { overscroll-behavior-y: contain; padding-bottom: max(14px, env(safe-area-inset-bottom)); }
+main { padding-bottom: env(safe-area-inset-bottom); }
+input, textarea, select { min-width: 0; max-width: 100%; }
+.form-grid, .mode-picker, .answer-editor, .game-answers, .profile-layout, .profile-stats {
+  grid-auto-columns: minmax(0, 1fr);
+}
+.form-grid > *, .mode-picker > *, .answer-editor > *, .game-answers > *,
+.profile-layout > *, .profile-stats > *, .metric > div, .editor-top > div,
+.page-heading > div, .section-header > div, .correction-row > div,
+.profile-header > div, .card-footer > span, .podium-card { min-width: 0; }
+h1, h2, h3, h4, p, label, small, .alert, .board-name, .card-footer > span,
+.game-answers button > span:nth-child(2), .sidebar-user strong { overflow-wrap: anywhere; }
+.button, .prize-play, .prize-motion-toggle { max-width: 100%; white-space: normal; text-align: center; }
+.page-heading, .section-header, .card-footer, .own-quiz-actions, .game-toolbar,
+.result-summary, .auth-links, .auth-bottom { flex-wrap: wrap; }
+.table-scroll { max-width: 100%; overscroll-behavior-x: contain; }
+.modal-backdrop { padding-bottom: max(24px, env(safe-area-inset-bottom)); }
+.modal { min-width: 0; overscroll-behavior-y: contain; }
+.modal > header { align-items: flex-start; }
+.modal > header .icon-button { flex-shrink: 0; }
+.metric-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.metric strong small { display: block; margin: 5px 0 0; white-space: normal; line-height: 1.5; }
+.landing-features > div { min-width: 0; grid-template-columns: 43px minmax(0, 1fr); }
+.landing-categories { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+.prize-showcase-header { grid-template-columns: minmax(0, 1fr) minmax(0, auto); }
+.contact-footer-intro, .contact-footer-details { min-width: 0; }
+.avatar-picker { flex-wrap: wrap; }
+.badges > div > div { min-width: 0; }
+.badges > div > span { flex-shrink: 0; }
+
+@media(max-width: 1180px) {
+  .landing-categories { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media(max-width: 960px) {
+  .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .prize-showcase-header { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+  .prize-showcase-actions { flex-direction: row; flex-wrap: wrap; align-items: center; }
+  .contact-footer-main { grid-template-columns: minmax(0, 1fr); }
+}
+@media(max-width: 720px) {
+  .topbar { height: auto; min-height: 66px; padding: max(10px, env(safe-area-inset-top)) max(14px, env(safe-area-inset-right)) 10px max(14px, env(safe-area-inset-left)); gap: 8px; }
+  main { padding-left: max(20px, env(safe-area-inset-left)); padding-right: max(20px, env(safe-area-inset-right)); }
+  .breadcrumb { min-width: 0; flex: 1; }
+  .breadcrumb strong { overflow-wrap: anywhere; }
+  .topbar-right { flex-shrink: 0; }
+  .sidebar { width: min(280px, calc(100% - 44px)); padding-top: max(20px, env(safe-area-inset-top)); padding-left: max(20px, env(safe-area-inset-left)); }
+  .modal-backdrop { padding: 12px max(12px, env(safe-area-inset-right)) max(12px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left)); }
+  .modal { max-height: calc(100dvh - 24px - env(safe-area-inset-bottom)); padding: 22px 18px; }
+  .button, .text-button, .card-play, .oauth-button, .share-link { font-size: 12px; }
+  .form label, .small-note, .question-instruction, .connection { font-size: 12px; }
+  .quiz-meta, .category-filters button, .card-footer > span { font-size: 11px; }
+  .page-heading p, .quiz-card p { font-size: 12px; }
+  .section-header > .text-button { white-space: normal; }
+  .modal .button, .question-screen > .button { font-size: 14px; }
+  .catalogue-toolbar { flex-wrap: wrap; }
+  .catalogue-toolbar .search-input { min-width: 0; flex: 1 1 220px; }
+  .catalogue-toolbar > select { flex: 1 1 145px; width: auto; }
+  .own-quiz-actions { flex-wrap: wrap; }
+  .editor-top { gap: 12px; }
+  .question-top { flex-wrap: wrap; }
+  .profile-header { flex-wrap: wrap; }
+}
+@media(max-width: 470px) {
+  main { padding-left: max(16px, env(safe-area-inset-left)); padding-right: max(16px, env(safe-area-inset-right)); }
+  .breadcrumb strong { display: none; }
+  .landing-categories { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .landing-categories strong { font-size: 11px; }
+  .landing-categories button { flex-wrap: wrap; }
+  .metric { align-items: flex-start; }
+  .metric strong { font-size: 22px; }
+  .metric > div > span, .metric strong small { font-size: 10px; }
+  .form-grid, .editor-form > .form-grid, .answer-editor, .mode-picker { grid-template-columns: minmax(0, 1fr); }
+  .demo-box > div { flex-wrap: wrap; }
+  .demo-box strong, .demo-box small { font-size: 12px; }
+  .auth-links { gap: 8px; font-size: 12px; }
+  .podium { flex-direction: column; align-items: stretch; gap: 12px; }
+  .podium-card { width: 100%; padding: 20px 16px; }
+  .podium-card.place-0 { order: -1; transform: none; padding: 24px 16px; }
+  .podium-card h3 { font-size: 16px; }
+  .podium-card > strong { font-size: 24px; }
+  .podium-card > span:not(.avatar), .podium-card p { font-size: 12px; }
+}
+@media(max-width: 360px) {
+  .topbar { flex-wrap: wrap; }
+  .topbar-right { margin-left: auto; }
+  .metric-grid, .profile-stats { grid-template-columns: minmax(0, 1fr); }
+  .metric { align-items: center; }
+  .challenge-hero { padding: 24px 16px; }
+}
+@media(pointer: coarse), (max-width: 720px) {
+  input, textarea, select, .answer-editor input, .search-input input,
+  .session-invitation input, td select { font-size: 16px !important; }
+  button, .app-shell button.button, .button, .text-button, .card-play, .oauth-button, .share-link,
+  .prize-play, .prize-motion-toggle { min-height: 44px; }
+  .icon-button, .answer-editor > div > button:first-child { min-width: 44px; min-height: 44px; }
+  .demo-box button, .editor-question-tabs button { min-width: 44px; }
+  .sidebar nav button { font-size: 14px; }
+  .join-button, .topbar-right > .text-button { font-size: 12px; }
+}
 .session-actions { display: grid; gap: 12px; }
 .exclusion-confirm { padding: 16px; margin: 16px 0; border: 1px solid #f6d9d5; border-radius: 9px; background: #fff1f0; }
 .exclusion-confirm .report-actions { margin-top: 12px; flex-wrap: wrap; }.share-buttons{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}.share-link{display:inline-flex;align-items:center;gap:5px;font-size:10px;font-weight:650;padding:6px 10px;border-radius:999px;border:1px solid #e4e6ec;background:#fff;color:#000;text-decoration:none}.share-link:hover{border-color:var(--orange)}.share-whatsapp{background:#e7f8ee;border-color:#c6ecd5}.share-telegram{background:#e6f3fc;border-color:#c6e3f6}.share-gmail{background:#fdecea;border-color:#f7d0cb}.game-share{display:flex;flex-direction:column;gap:6px;padding:16px;margin-bottom:18px}.game-share input{width:100%}.invite-notice{margin-top:0}

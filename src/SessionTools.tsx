@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { Copy, Users, UserMinus, Share2, Trash2 } from 'lucide-react';
 import { api, message, number, sessionLink, shareTargets } from './api';
 import { Avatar, Modal } from './components';
@@ -37,17 +37,71 @@ export function SessionInvitation({ session }: { session: Pick<Session, 'id' | '
     {session.visibility === 'invitation' ? code ? <>
       <label>Code d’invitation<input readOnly value={code} onFocus={e => e.currentTarget.select()} /></label>
       <button className="text-button" onClick={() => void copy(code, 'Code copié')}><Copy size={14} />Copier le code</button>
-      <small>Le lien contient déjà le code : un clic suffit pour entrer dans la salle.</small>
+      <small>Le lien contient le code. L’autorisation explicite d’un administrateur reste obligatoire pour entrer.</small>
     </> : <span role="alert">Code indisponible. Actualisez la liste des sessions.</span> :
-      <small>{session.visibility === 'public' ? 'Quiz public : aucun code nécessaire.' : 'Quiz privé : accès réservé aux adresses électroniques invitées, sans code.'}</small>}
+      <small>{session.visibility === 'public' ? 'Quiz public : aucun code nécessaire, mais un administrateur doit autoriser chaque joueur.' : 'Quiz privé : l’autorisation d’un administrateur est obligatoire, même avec une invitation.'}</small>}
     {copied && <span role="status">{copied}</span>}
     {error && <span className="alert error" role="alert">{error}</span>}
   </div>;
 }
 
 type ManagedPlayer = BoardEntry & { excluded: boolean; can_exclude: boolean; can_remove?: boolean };
+type AccessRequest = { id: string; email: string; pseudo: string; status: 'pending' | 'approved' | 'denied' };
 
-export function SessionPlayers({ id, title, close, changed }: { id: string; title: string; close: () => void; changed: () => void }) {
+function SessionAccess({ id, changed }: { id: string; changed: () => void }) {
+  const [requests, setRequests] = useState<AccessRequest[] | null>(null);
+  const [email, setEmail] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+  useEffect(() => {
+    let active = true;
+    api<AccessRequest[]>(`/sessions/${id}/access`).then(value => { if (active) setRequests(value); })
+      .catch(e => { if (active) setError(message(e)); });
+    return () => { active = false; };
+  }, [id]);
+  async function refresh() {
+    setBusy(true); setError('');
+    try { setRequests(await api<AccessRequest[]>(`/sessions/${id}/access`)); }
+    catch (e) { setError(message(e)); }
+    finally { setBusy(false); }
+  }
+  async function decide(address: string, approved: boolean) {
+    setBusy(true); setError(''); setSuccess('');
+    try {
+      const result = await api<{ message: string }>(`/sessions/${id}/access`, 'POST', { email: address, approved });
+      setSuccess(result.message); setEmail('');
+      setRequests(await api<AccessRequest[]>(`/sessions/${id}/access`)); changed();
+    } catch (e) { setError(message(e)); }
+    finally { setBusy(false); }
+  }
+  function submit(e: FormEvent) { e.preventDefault(); void decide(email, true); }
+  return <section className="panel">
+    <h3>Autorisations d’entrée — Administrateur</h3>
+    <p>Chaque joueur doit être autorisé pour cette salle, même avec un lien ou un code. Un refus ou une révocation supprime définitivement sa participation, ses réponses et son score dans cette salle, sans supprimer son compte.</p>
+    <form className="form" onSubmit={submit}>
+      <label>Adresse électronique du joueur à autoriser<input required type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="joueur@exemple.fr" /></label>
+      <button className="button orange" disabled={busy}>Autoriser l’entrée dans cette salle</button>
+    </form>
+    <button className="text-button" disabled={busy} onClick={() => void refresh()}>Actualiser les demandes d’entrée</button>
+    {error && <div className="alert error" role="alert">{error}</div>}
+    {success && <div className="alert success" role="status">{success}</div>}
+    {!requests && !error && <div className="loading">Chargement des demandes…</div>}
+    {requests && <div className="table-scroll"><table><thead><tr><th>Joueur</th><th>Adresse électronique</th><th>Autorisation</th><th>Action</th></tr></thead>
+      <tbody>{requests.map(request => <tr key={request.id}><td>{request.pseudo}</td><td>{request.email}</td>
+        <td>{request.status === 'approved' ? 'Autorisé' : request.status === 'denied' ? 'Refusé' : 'En attente'}</td>
+        <td><div className="report-actions">
+          {request.status !== 'approved' && <button className="button secondary compact" disabled={busy} onClick={() => void decide(request.email, true)}>Autoriser {request.pseudo}</button>}
+          {request.status !== 'denied' && <button className="button danger-button compact" disabled={busy} onClick={() => {
+            if (window.confirm(`Refuser l’entrée de ${request.pseudo} et supprimer définitivement sa participation, ses réponses et son score dans cette salle ? Son compte sera conservé.`)) void decide(request.email, false);
+          }}>{request.status === 'approved' ? 'Révoquer et supprimer' : 'Refuser'} {request.pseudo}</button>}
+        </div></td></tr>)}</tbody></table>
+      {!requests.length && <p>Aucune demande d’entrée pour cette salle.</p>}
+    </div>}
+  </section>;
+}
+
+export function SessionPlayers({ id, title, close, changed, administrator = false }: { id: string; title: string; close: () => void; changed: () => void; administrator?: boolean }) {
   const [players, setPlayers] = useState<ManagedPlayer[] | null>(null);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
@@ -80,6 +134,8 @@ export function SessionPlayers({ id, title, close, changed }: { id: string; titl
     finally { setBusy(false); }
   }
   return <Modal title={`Joueurs — ${title}`} close={close} wide>
+    {administrator && <SessionAccess id={id} changed={() => { void refresh(); changed(); }} />}
+    {!administrator && <div className="alert info">Seul un administrateur peut autoriser l’entrée des joueurs. Les invitations et codes ne remplacent pas son approbation.</div>}
     <p>Excluez un joueur de cette session, avant, pendant ou après le quiz. Son retour sera bloqué ; son score, ses réponses et ses résultats seront conservés.</p>
     {error && <div className="alert error" role="alert">{error}</div>}
     {success && <div className="alert success" role="status">{success}</div>}

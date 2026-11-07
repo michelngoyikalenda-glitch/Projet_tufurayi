@@ -49,6 +49,8 @@ async function fixture(mode = 'async', visibility = 'public', emails = [], quest
   const session = await request('/sessions', { method: 'POST', token: owner.token,
     body: { quizId: quiz.body.id, mode, opensAt: clock - 60000, closesAt: clock + 86400000, emails } });
   assert.equal(session.status, 201);
+  for (const userId of userIds) await db.query(`INSERT INTO session_access (session_id,user_id,status,requested_at)
+    VALUES (?,?,'approved',?)`, [session.body.id, userId, clock]);
   return { quiz: detail.body, id: session.body.id };
 }
 async function correctAnswer(questionId) {
@@ -72,6 +74,7 @@ after(async () => {
   const placeholders = userIds.map(() => '?').join(',');
   if (userIds.length) await db.transaction(async tx => {
     await tx.query(`DELETE FROM reports WHERE user_id IN (${placeholders})`, userIds);
+    await tx.query(`DELETE FROM session_access WHERE user_id IN (${placeholders}) OR decided_by IN (${placeholders})`, [...userIds, ...userIds]);
     await tx.query(`DELETE FROM session_exclusions WHERE user_id IN (${placeholders}) OR excluded_by IN (${placeholders})`, [...userIds, ...userIds]);
     await tx.query(`DELETE FROM participation_answers WHERE participation_id IN (SELECT id FROM participations WHERE user_id IN (${placeholders}))`, userIds);
     await tx.query(`DELETE FROM participations WHERE user_id IN (${placeholders})`, userIds);
@@ -461,6 +464,32 @@ test('statistiques et modération : accès créateur et administrateur', async (
   await db.query('UPDATE users SET role=? WHERE id=?', [administrator.role, owner.id]);
 });
 
+test('rôles : un ancien créateur devenu joueur perd toutes les fonctions de gestion', async () => {
+  const { quiz, id } = await fixture('live', 'invitation');
+  await service.game.join(id, owner);
+  await db.query("UPDATE users SET role='player' WHERE id=?", [owner.id]);
+  try {
+    const [demoted] = await db.query('SELECT * FROM users WHERE id=?', [owner.id]);
+    assert.equal((await service.game.snapshot(id, demoted)).host, false);
+    await assert.rejects(service.game.control(id, demoted, 'start'), { status: 403 });
+    await assert.rejects(service.game.players(id, demoted), { status: 403 });
+    await assert.rejects(service.game.exclude(id, demoted, player.id), { status: 403 });
+    assert.equal((await request(`/quizzes/${quiz.id}`, { token: owner.token })).status, 403);
+    assert.equal((await request('/quizzes', { token: owner.token })).body.some(q => q.id === quiz.id), false);
+    const session = (await request('/sessions', { token: owner.token })).body.find(s => s.id === id);
+    assert.ok(session);
+    assert.equal(session.invitation_code, null);
+    assert.equal((await request(`/sessions/${id}/players`, { token: owner.token })).status, 403);
+    assert.equal((await request(`/sessions/${id}/control`, { method: 'POST', token: owner.token, body: { action: 'start' } })).status, 403);
+    assert.equal((await request(`/quizzes/${quiz.id}/stats`, { token: owner.token })).status, 403);
+    assert.equal((await request('/admin', { token: owner.token })).status, 403);
+  } finally {
+    await db.query("UPDATE users SET role='creator' WHERE id=?", [owner.id]);
+  }
+  assert.equal((await request(`/quizzes/${quiz.id}/stats`, { token: owner.token })).status, 200);
+  assert.equal((await service.game.snapshot(id, owner)).host, true);
+});
+
 test('réinitialisation : lien unique, nouvelle connexion et révocation des access tokens', async () => {
   assert.equal((await request('/auth/forgot', { method: 'POST', body: { email: player.email } })).status, 200);
   const mail = mails.filter(m => m.to === player.email).at(-1);
@@ -487,6 +516,8 @@ test('invitation : un nouveau joueur s’inscrit depuis le lien puis entre dans 
   r = await request('/auth/login', { method: 'POST', body: { email, password: 'TestPassword2026!' } });
   userIds.push(r.body.user.id);
   assert.equal((await request(`/sessions/${id}`, { token: r.body.token })).status, 403);
+  assert.equal((await request(`/sessions/${id}/join`, { method: 'POST', token: r.body.token, body: { code: link.searchParams.get('code') } })).body.code, 'SESSION_UNAUTHORIZED');
+  await service.game.decideAccess(id, { ...owner, role: 'admin' }, email, true);
   assert.equal((await request(`/sessions/${id}/join`, { method: 'POST', token: r.body.token, body: { code: link.searchParams.get('code') } })).status, 200);
   assert.equal((await request(`/sessions/${id}`, { token: r.body.token })).status, 200);
   const other = `${prefix}-invite-bis@test.fr`;
@@ -502,6 +533,7 @@ test('administrateur : suppression définitive d’un joueur non autorisé', asy
   const moderator = await register('Moderateur');
   const player = await register('Fidele');
   await db.query("UPDATE users SET role='admin' WHERE id=?", [moderator.id]);
+  for (const u of [player, intruder]) await service.game.decideAccess(id, { ...moderator, role: 'admin' }, u.email, true);
   await service.game.join(id, player);
   await service.game.join(id, intruder);
   const path = `/sessions/${id}/players/${intruder.id}/remove`;

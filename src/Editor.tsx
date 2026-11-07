@@ -113,7 +113,7 @@ export function Schedule({ quiz, close, saved }: { quiz: Quiz; close: () => void
     ].map(item => <button type="button" key={item.value} className={mode === item.value ? 'active' : ''} onClick={() => setMode(item.value)}><item.icon size={23} /><strong>{item.label}</strong><small>{item.text}</small></button>)}</div>
       <label>Ouverture<input type="datetime-local" required value={opens} onChange={e => setOpens(e.target.value)} /></label>
       <label>Fermeture<input type="datetime-local" required value={closes} onChange={e => setCloses(e.target.value)} /></label>
-      <label>Inviter des joueurs (adresses électroniques)<textarea rows={3} value={emails} onChange={e => setEmails(e.target.value)} placeholder="alex@exemple.fr, lea@exemple.fr" /><small>Les invitations apparaîtront dans leur tableau de bord. Une participation par compte.</small></label>
+      <label>Inviter des joueurs (adresses électroniques)<textarea rows={3} value={emails} onChange={e => setEmails(e.target.value)} placeholder="alex@exemple.fr, lea@exemple.fr" /><small>Les invitations apparaîtront dans leur tableau de bord. Elles ne remplacent pas l’autorisation explicite d’un administrateur pour cette salle.</small></label>
       {quiz.visibility === 'invitation' && <div className="alert info"><Copy size={17} />Code du quiz : <strong>{quiz.invitation_code}</strong></div>}
       {error && <div className="alert error" role="alert">{error}</div>}
       <button className="button orange full" disabled={busy}>{busy ? 'Planification…' : 'Créer la session'}<ArrowRight size={17} /></button>

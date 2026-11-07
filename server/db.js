@@ -12,6 +12,10 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE TABLE IF NOT EXISTS auth_tokens (
   hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), kind TEXT NOT NULL, expires_at BIGINT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS oauth_requests (
+  hash TEXT PRIMARY KEY, browser_hash TEXT NOT NULL, provider TEXT NOT NULL,
+  verifier TEXT NOT NULL, expires_at BIGINT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS quizzes (
   id TEXT PRIMARY KEY, owner_id TEXT NOT NULL REFERENCES users(id), title TEXT NOT NULL,
   description TEXT NOT NULL, category TEXT NOT NULL, cover TEXT NOT NULL, visibility TEXT NOT NULL,
@@ -47,6 +51,12 @@ CREATE TABLE IF NOT EXISTS session_exclusions (
   excluded_by TEXT NOT NULL REFERENCES users(id), excluded_at BIGINT NOT NULL,
   PRIMARY KEY(session_id, user_id)
 );
+CREATE TABLE IF NOT EXISTS session_access (
+  session_id TEXT NOT NULL REFERENCES sessions(id), user_id TEXT NOT NULL REFERENCES users(id),
+  status TEXT NOT NULL DEFAULT 'pending', requested_at BIGINT NOT NULL,
+  decided_by TEXT REFERENCES users(id), decided_at BIGINT,
+  PRIMARY KEY(session_id, user_id)
+);
 CREATE TABLE IF NOT EXISTS invitations (
   id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id), email TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'pending', UNIQUE(session_id, email)
@@ -57,6 +67,7 @@ CREATE TABLE IF NOT EXISTS reports (
 );
 CREATE INDEX IF NOT EXISTS participation_user ON participations(user_id);
 CREATE INDEX IF NOT EXISTS tokens_expiry ON auth_tokens(expires_at);
+CREATE INDEX IF NOT EXISTS oauth_expiry ON oauth_requests(expires_at);
 `;
 
 export async function openDatabase({ url = process.env.DATABASE_URL, filename = resolve('data', 'tufurayi.sqlite') } = {}) {

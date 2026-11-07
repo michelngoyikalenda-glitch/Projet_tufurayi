@@ -97,7 +97,7 @@ export function AdminPage() {
       <section className="panel table-scroll"><div className="section-header"><h3>Les utilisateurs</h3></div><table><thead><tr><th>Utilisateur</th><th>Email</th><th>Rôle</th><th>Accès</th></tr></thead><tbody>{data.users.map(u => <tr key={u.id}>
         <td><strong>{u.pseudo}</strong></td><td>{u.email}</td><td><select aria-label={`Rôle de ${u.pseudo}`} value={u.role} disabled={busy} onChange={e => update(`/admin/users/${u.id}`, { role: e.target.value, disabled: u.disabled })}><option value="player">Joueur</option><option value="creator">Créateur</option><option value="admin">Admin</option></select></td>
         <td><button className={`button compact ${u.disabled ? 'secondary' : 'danger-button'}`} disabled={busy} onClick={() => update(`/admin/users/${u.id}`, { role: u.role, disabled: !u.disabled })}>{u.disabled ? 'Réactiver' : 'Suspendre'}</button></td></tr>)}</tbody></table></section>
-      <section className="panel table-scroll"><div className="section-header"><h3>Résultats collectifs</h3><span className="small-note">Téléchargez le relevé PDF de chaque session, ou excluez et supprimez les joueurs non autorisés.</span></div>
+      <section className="panel table-scroll"><div className="section-header"><h3>Résultats collectifs et autorisations d’entrée</h3><span className="small-note">Ouvrez « Gérer les joueurs » pour autoriser ou refuser l’entrée dans chaque salle.</span></div>
         {!data.sessions.length ? <p className="muted">Aucune session à afficher.</p> :
           <table><thead><tr><th>Quiz</th><th>Votre état</th><th>Mode</th><th>Animateur</th><th>Joueurs</th><th>Date</th><th /></tr></thead><tbody>{data.sessions.map(session => {
             const state = sessionState(session);
@@ -105,6 +105,7 @@ export function AdminPage() {
             <td><strong>{session.title}</strong></td><td><span className={`status ${state.done ? 'done' : ''}`}>{state.label}</span></td>
             <td>{session.mode === 'live' ? 'En direct' : 'À votre rythme'}</td><td>{session.owner}</td><td>{session.player_count}</td><td>{date(session.created_at)}</td>
             <td><div className="report-actions"><button className="button secondary compact" onClick={() => setPlayers({ id: session.id, title: session.title })}><Users size={15} />Gérer les joueurs</button>
+              {session.pending_access_count > 0 && <span className="pill">{session.pending_access_count} demande(s) d’entrée</span>}
               <button className="button secondary compact" disabled={downloading !== ''} onClick={() => void download(session.id)}><Download size={15} />{downloading === session.id ? 'Préparation…' : 'Télécharger le PDF'}</button></div></td>
           </tr>;
           })}</tbody></table>}
@@ -113,6 +114,6 @@ export function AdminPage() {
         {!data.reports.length && <p className="muted">Aucun signalement. Tout va bien !</p>}{data.reports.map(r => <div className="report" key={r.id}><div><h4>{r.title}</h4><p>{r.reason}</p><small>Signalé par {r.pseudo} • {r.status === 'open' ? 'À traiter' : 'Résolu'}</small></div>
           {r.status === 'open' && <div className="report-actions"><button className="button secondary compact" disabled={busy} onClick={() => update(`/admin/reports/${r.id}`, { hide: false })}><Check size={15} />Classer</button><button className="button danger-button compact" disabled={busy} onClick={() => update(`/admin/reports/${r.id}`, { hide: true })}><EyeOff size={15} />Masquer le quiz</button></div>}</div>)}
       </section></>}
-    {players && <SessionPlayers id={players.id} title={players.title} close={closePlayers} changed={() => void load()} />}
+    {players && <SessionPlayers id={players.id} title={players.title} close={closePlayers} changed={() => void load()} administrator />}
   </>;
 }

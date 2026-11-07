@@ -11,6 +11,7 @@ export class HttpError extends Error {
 export const assert = (condition, status, message) => { if (!condition) throw new HttpError(status, message); };
 export const hashToken = (token) => createHash('sha256').update(token).digest('hex');
 export const safeUser = ({ id, email, pseudo, role, avatar, verified }) => ({ id, email, pseudo, role, avatar, verified: Boolean(verified) });
+export const canManageQuiz = (user, ownerId) => user.role === 'admin' || user.role === 'creator' && user.id === ownerId;
 export const emailSchema = z.string().trim().pipe(z.email().max(254)).transform(v => v.toLowerCase());
 const bcryptLimit = value => Buffer.byteLength(value, 'utf8') <= 72;
 export const passwordSchema = z.string().min(8, 'Le mot de passe doit contenir au moins 8 caractères.').max(72)
@@ -35,6 +36,7 @@ export async function getSecret() {
 }
 
 export function createAuth(db, secret, { mailer, origin = process.env.APP_URL || 'http://localhost:5173' } = {}) {
+  const registrationRole = process.env.NODE_ENV === 'production' ? z.literal('player').default('player') : z.enum(['player', 'creator']).default('player');
   const cookieOptions = { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'strict', path: '/api/auth' };
   const smtp = mailer || (process.env.SMTP_HOST ? nodemailer.createTransport({
     host: process.env.SMTP_HOST, port: Number(process.env.SMTP_PORT || 587), secure: process.env.SMTP_PORT === '465',
@@ -53,7 +55,7 @@ export function createAuth(db, secret, { mailer, origin = process.env.APP_URL ||
     const link = url.toString();
     if (smtp) await smtp.sendMail({ from: process.env.MAIL_FROM || 'Tufurayi <noreply@example.com>', to: user.email,
       subject: kind === 'verify' ? 'Vérifiez votre compte Tufurayi' : 'Réinitialisez votre mot de passe',
-      text: `Bonjour ${user.pseudo},\n\n${invite ? 'Vérifiez votre compte puis connectez-vous : vous entrerez directement dans la salle du quiz auquel vous avez été invité.\n\n' : ''}${link}\n\nSi vous n'êtes pas à l'origine de cette demande, ignorez ce message.` });
+      text: `Bonjour ${user.pseudo},\n\n${invite ? 'Vérifiez votre compte puis connectez-vous. Un administrateur doit autoriser votre entrée dans la salle du quiz auquel vous avez été invité.\n\n' : ''}${link}\n\nSi vous n'êtes pas à l'origine de cette demande, ignorez ce message.` });
     else {
       assert(process.env.NODE_ENV !== 'production', 503, 'Le service email n’est pas configuré.');
       console.info(`[Email local → ${user.email}] ${link}`);
@@ -101,18 +103,20 @@ export function createAuth(db, secret, { mailer, origin = process.env.APP_URL ||
     google: {
       label: 'Google',
       configured: () => Boolean(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET),
-      authorize(redirectUri, state) {
+      authorize(redirectUri, state, verifier) {
         const url = new URL('https://accounts.google.com/o/oauth2/v2/auth');
         url.searchParams.set('client_id', process.env.GOOGLE_CLIENT_ID);
         url.searchParams.set('redirect_uri', redirectUri);
         url.searchParams.set('response_type', 'code');
         url.searchParams.set('scope', 'openid email profile');
         url.searchParams.set('state', state);
+        url.searchParams.set('code_challenge', createHash('sha256').update(verifier).digest('base64url'));
+        url.searchParams.set('code_challenge_method', 'S256');
         return url.toString();
       },
-      async profile(code, redirectUri) {
+      async profile(code, redirectUri, verifier) {
         const token = await postForm('https://oauth2.googleapis.com/token', { code, client_id: process.env.GOOGLE_CLIENT_ID,
-          client_secret: process.env.GOOGLE_CLIENT_SECRET, redirect_uri: redirectUri, grant_type: 'authorization_code' });
+          client_secret: process.env.GOOGLE_CLIENT_SECRET, redirect_uri: redirectUri, grant_type: 'authorization_code', code_verifier: verifier });
         const response = await fetch('https://openidconnect.googleapis.com/v1/userinfo', { headers: { Authorization: `Bearer ${token.access_token}` } });
         assert(response.ok, 502, 'Google n’a pas renvoyé votre profil.');
         const profile = await response.json();
@@ -143,11 +147,14 @@ export function createAuth(db, secret, { mailer, origin = process.env.APP_URL ||
     }
   };
   const oauthRedirectUri = provider => `${origin}/api/auth/oauth/${provider}/callback`;
+  const oauthCookieOptions = provider => ({ httpOnly: true,
+    secure: process.env.NODE_ENV === 'production' || new URL(origin).protocol === 'https:' || provider === 'apple',
+    sameSite: provider === 'apple' ? 'none' : 'lax', path: `/api/auth/oauth/${provider}/callback` });
   return {
     authenticate, middleware, access, sendLink,
     async register(req, res) {
       const input = z.object({ email: emailSchema, password: passwordSchema,
-        pseudo: z.string().trim().min(2).max(30), role: z.enum(['player', 'creator']).default('player'),
+        pseudo: z.string().trim().min(2).max(30), role: registrationRole,
         invite: z.object({ session: z.uuid(), code: z.string().trim().max(30).regex(/^[\w-]*$/).optional() }).optional().catch(undefined) }).parse(req.body);
       assert(!(await db.query('SELECT id FROM users WHERE email=?', [input.email])).length, 409, 'Cet email est déjà utilisé.');
       const user = { email: input.email, pseudo: input.pseudo, role: input.role, id: randomUUID(), avatar: 'indigo', verified: 0 };
@@ -199,13 +206,22 @@ export function createAuth(db, secret, { mailer, origin = process.env.APP_URL ||
       res.json({ message: kind === 'verify' ? 'Email vérifié. Vous pouvez vous connecter.' : 'Mot de passe modifié. Reconnectez-vous.' });
     },
     oauthProviders: () => ({ google: oauth.google.configured(), apple: oauth.apple.configured() }),
-    oauthStart(req, res) {
+    async oauthStart(req, res) {
       const provider = z.enum(['google', 'apple']).parse(req.params.provider);
       const conf = oauth[provider];
       assert(conf.configured(), 503, `La connexion ${conf.label} n’est pas encore configurée.`);
-      const state = jwt.sign({ p: provider, nonce: randomBytes(16).toString('hex') }, secret,
-        { expiresIn: '10m', issuer: 'tufurayi', audience: 'tufurayi-oauth' });
-      res.redirect(conf.authorize(oauthRedirectUri(provider), state));
+      assert(provider !== 'apple' || new URL(origin).protocol === 'https:', 503,
+        'La connexion Apple nécessite une adresse APP_URL en HTTPS.');
+      const state = randomBytes(32).toString('hex');
+      const browser = randomBytes(32).toString('hex');
+      const verifier = randomBytes(32).toString('base64url');
+      await db.transaction(async tx => {
+        await tx.query('DELETE FROM oauth_requests WHERE expires_at<=?', [Date.now()]);
+        await tx.query('INSERT INTO oauth_requests (hash,browser_hash,provider,verifier,expires_at) VALUES (?,?,?,?,?)',
+          [hashToken(state), hashToken(browser), provider, verifier, Date.now() + 600000]);
+      });
+      res.cookie('oauth_browser', browser, { ...oauthCookieOptions(provider), maxAge: 600000 });
+      res.redirect(conf.authorize(oauthRedirectUri(provider), state, verifier));
     },
     async oauthCallback(req, res) {
       const provider = z.enum(['google', 'apple']).parse(req.params.provider);
@@ -213,17 +229,30 @@ export function createAuth(db, secret, { mailer, origin = process.env.APP_URL ||
       assert(conf.configured(), 503, `La connexion ${conf.label} n’est pas encore configurée.`);
       const { code, state } = z.object({ code: z.string().min(10).max(4096), state: z.string().min(10).max(2048) })
         .parse({ code: req.query.code ?? req.body?.code, state: req.query.state ?? req.body?.state });
-      let payload;
-      try { payload = jwt.verify(state, secret, { issuer: 'tufurayi', audience: 'tufurayi-oauth' }); }
-      catch { throw new HttpError(400, 'Cette connexion a expiré. Recommencez.'); }
-      assert(payload.p === provider, 400, 'Requête de connexion invalide.');
-      const profile = await conf.profile(code, oauthRedirectUri(provider));
+      const browser = req.cookies.oauth_browser;
+      assert(typeof browser === 'string' && /^[a-f0-9]{64}$/.test(browser), 400,
+        'Cette connexion ne provient pas de votre navigateur. Recommencez.');
+      const saved = await db.transaction(async tx => {
+        const [saved] = await tx.query(`SELECT * FROM oauth_requests WHERE hash=?${tx.lock}`, [hashToken(state)]);
+        assert(saved && Number(saved.expires_at) > Date.now() && saved.provider === provider &&
+          saved.browser_hash === hashToken(browser), 400, 'Cette connexion est invalide ou expirée. Recommencez.');
+        await tx.query('DELETE FROM oauth_requests WHERE hash=?', [saved.hash]);
+        return saved;
+      });
+      res.clearCookie('oauth_browser', oauthCookieOptions(provider));
+      const profile = await conf.profile(code, oauthRedirectUri(provider), saved.verifier);
       const user = await db.transaction(async tx => {
         const [existing] = await tx.query(`SELECT * FROM users WHERE email=?${tx.lock}`, [profile.email]);
         if (existing) {
           assert(!existing.disabled, 403, 'Ce compte est désactivé.');
-          // Le fournisseur a confirmé l’adresse : un compte pas encore vérifié devient vérifié.
-          if (!existing.verified) { await tx.query('UPDATE users SET verified=1 WHERE id=?', [existing.id]); existing.verified = 1; }
+          if (!existing.verified) {
+            const passwordHash = await bcrypt.hash(randomBytes(32).toString('hex'), 12);
+            await tx.query('UPDATE users SET verified=1,password_hash=?,token_version=token_version+1 WHERE id=?',
+              [passwordHash, existing.id]);
+            await tx.query('DELETE FROM auth_tokens WHERE user_id=?', [existing.id]);
+            existing.verified = 1;
+            existing.token_version += 1;
+          }
           return existing;
         }
         const name = profile.name.trim().slice(0, 30) || profile.email.split('@')[0].slice(0, 30);

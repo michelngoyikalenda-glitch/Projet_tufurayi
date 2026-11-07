@@ -31,7 +31,7 @@ export function saveInvite(invite: PendingInvite | null) {
   try { invite ? localStorage.setItem(inviteKey, JSON.stringify({ ...invite, at: Date.now() })) : localStorage.removeItem(inviteKey); } catch { /* stockage indisponible */ }
 }
 export function shareTargets(link: string, title = 'un quiz') {
-  const text = `Rejoins-moi sur Tufurayi pour jouer à ${title} ! Clique sur ce lien pour entrer dans la salle :`;
+  const text = `Rejoins-moi sur Tufurayi pour jouer à ${title} ! L’entrée nécessite l’autorisation d’un administrateur. Voici le lien de la salle :`;
   const full = `${text} ${link}`;
   return [
     { name: 'WhatsApp', url: `https://wa.me/?text=${encodeURIComponent(full)}` },
@@ -46,11 +46,11 @@ export function setToken(value: string | null) {
   window.dispatchEvent(new Event('auth:token'));
 }
 export class ApiError extends Error {
-  constructor(message: string, public status: number) { super(message); }
+  constructor(message: string, public status: number, public code?: string) { super(message); }
 }
 async function decode<T>(response: Response): Promise<T> {
   const body = await response.json();
-  if (!response.ok) throw new ApiError(body.error || 'Une erreur est survenue.', response.status);
+  if (!response.ok) throw new ApiError(body.error || 'Une erreur est survenue.', response.status, body.code);
   return body;
 }
 export async function restore() {

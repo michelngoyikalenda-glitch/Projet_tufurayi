@@ -32,10 +32,11 @@ test('Socket.IO réel : deux comptes, lancement synchronisé, réponse secrète,
   const secret = 'socket-test-secret-'.repeat(4);
   const owner = { id: randomUUID(), email: 'creator@socket.test', pseudo: 'Créateur socket', role: 'creator', token_version: 0 };
   const player = { id: randomUUID(), email: 'player@socket.test', pseudo: 'Joueur socket', role: 'player', token_version: 0 };
+  const administrator = { id: randomUUID(), email: 'admin@socket.test', pseudo: 'Administrateur socket', role: 'admin', token_version: 0 };
   const quizId = randomUUID(), questionId = randomUUID(), answerId = randomUUID(), sessionId = randomUUID();
   const now = Date.now();
   await db.transaction(async tx => {
-    for (const u of [owner, player]) await tx.query('INSERT INTO users (id,email,password_hash,pseudo,role,verified,created_at) VALUES (?,?,?,?,?,1,?)',
+    for (const u of [owner, player, administrator]) await tx.query('INSERT INTO users (id,email,password_hash,pseudo,role,verified,created_at) VALUES (?,?,?,?,?,1,?)',
       [u.id, u.email, 'not-a-login-hash', u.pseudo, u.role, now]);
     await tx.query('INSERT INTO quizzes (id,owner_id,title,description,category,cover,visibility,invitation_code,published,created_at) VALUES (?,?,?,?,?,?,?,?,1,?)',
       [quizId, owner.id, 'Quiz socket', 'Test de synchronisation', 'Sciences', 'blue', 'public', 'TEST', now]);
@@ -70,6 +71,12 @@ test('Socket.IO réel : deux comptes, lancement synchronisé, réponse secrète,
     const connected = Promise.all([event(hostSocket, 'connect'), event(playerSocket, 'connect')]);
     hostSocket.connect(); playerSocket.connect(); await connected;
     await emit(hostSocket, 'session:join', { id: sessionId });
+    await assert.rejects(emit(playerSocket, 'session:join', { id: sessionId }), /sans l’autorisation explicite/);
+    const approval = await fetch(`${base}/api/sessions/${sessionId}/access`, {
+      method: 'POST', headers: { Authorization: `Bearer ${auth.access(administrator)}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: player.email, approved: true })
+    });
+    assert.equal(approval.status, 200);
     await emit(playerSocket, 'session:join', { id: sessionId });
     const questions = Promise.all([event(hostSocket, 'game:question'), event(playerSocket, 'game:question')]);
     await emit(hostSocket, 'session:start', { id: sessionId });
@@ -118,6 +125,14 @@ test('Socket.IO réel : deux comptes, lancement synchronisé, réponse secrète,
     const retainedPlayer = (await retained.json()).players.find(entry => entry.id === player.id);
     assert.equal(retainedPlayer.excluded, true);
     assert.equal(retainedPlayer.score, end.score);
+    const unauthorized = event(hostSocket, 'session:excluded', value => value.code === 'SESSION_UNAUTHORIZED');
+    await db.query("UPDATE users SET role='player' WHERE id=?", [owner.id]);
+    const hostDenied = await fetch(`${base}/api/sessions/${sessionId}/access`, {
+      method: 'POST', headers: { Authorization: `Bearer ${auth.access(administrator)}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: owner.email, approved: false })
+    });
+    assert.equal(hostDenied.status, 200);
+    assert.match((await unauthorized).error, /sans l’autorisation explicite/);
   } finally {
     hostSocket?.close(); playerSocket?.close();
     if (child && child.exitCode === null) { const exited = once(child, 'exit'); child.kill(); await exited; }

@@ -28,7 +28,7 @@ npm run dev
 | Créatrice | camille@demo.fr | DemoQuiz2026! |
 | Administrateur | admin@demo.fr | DemoQuiz2026! |
 
-La page de connexion peut préremplir ces identifiants. Pour tester le direct, connectez la créatrice dans un navigateur et un joueur dans un autre navigateur/profil privé. La créatrice ouvre une salle depuis **Mes quiz → Mes sessions** ; le joueur la rejoint depuis **Quiz en direct**. La créatrice lance la partie et passe à la question suivante après le timer.
+En développement seulement, la page de connexion peut préremplir ces identifiants. Tous les boutons et identifiants de démonstration sont exclus de l’interface compilée pour la production. Pour tester le direct, connectez la créatrice dans un navigateur, un joueur dans un autre navigateur/profil privé et l’administrateur dans un troisième profil. La créatrice ouvre une salle depuis **Mes quiz → Mes sessions**. L’administrateur autorise le joueur pour cette salle depuis **Administration → Résultats collectifs et autorisations d’entrée → Gérer les joueurs**. Le joueur la rejoint ensuite depuis **Quiz en direct**. La créatrice lance la partie et passe à la question suivante après le timer.
 
 Sur un autre appareil du même réseau, remplacez `localhost` par l’IP du PC et configurez `APP_URL=http://IP_DU_PC:5173` dans `.env`. Autorisez uniquement les ports nécessaires dans le pare-feu. Le mode HTTP local est réservé au développement.
 
@@ -36,6 +36,7 @@ Sur un autre appareil du même réseau, remplacez `localhost` par l’IP du PC e
 
 - Textes de l’interface et validations en français, y compris les libellés accessibles. Les erreurs techniques sont journalisées et présentées avec un message français.
 - Interface claire avec fonds crème, pêche et lavande, cartes pastel et textes secondaires noirs (y compris les indications des champs). Les alertes conservent leurs couleurs.
+- Mise en page adaptative pour téléphones dès 320 px, tablettes et ordinateurs : menu mobile, grilles et boutons réorganisés, textes longs renvoyés à la ligne, tableaux défilants et fenêtres adaptées à la hauteur disponible. Sur mobile et écran tactile, les commandes principales mesurent au moins 44 px et les champs utilisent une police de 16 px pour éviter le zoom automatique à la saisie.
 - Bannière Challenge Tufurayi animée sur l’accueil, le tableau de bord et les fenêtres d’authentification, avec relance et respect de la réduction des animations. Les boutons du Hero restent accessibles.
 - Vitrine animée de 22 idées de cadeaux sous la bannière d’accueil et du tableau de bord, avec pause et respect de la réduction des animations. Les images sont illustratives : aucune attribution de cadeaux n’est actuellement gérée.
 - Logo Tufurayi bleu et orange partagé par le menu, l’écran de chargement et les bannières.
@@ -47,9 +48,9 @@ Sur un autre appareil du même réseau, remplacez `localhost` par l’IP du PC e
 - Tableau de bord personnel, recherche/catégories, invitations, reprise et historique.
 - Éditeur de 1 à 50 questions, 2 à 6 réponses, une seule bonne réponse, 5 à 120 secondes par question ; publication/brouillon, duplication.
 - Avant l’enregistrement, toutes les questions sont vérifiées, y compris les onglets masqués. Les champs à compléter sont listés avec leur numéro de question/réponse, les onglets concernés sont signalés et le premier champ invalide reçoit le focus.
-- Quiz publics, privés sur liste d’emails, ou accessibles par code/liste d’emails. Le lien identifie la session, le code autorise les quiz avec code.
+- Quiz publics, privés sur liste d’emails, ou accessibles par code/liste d’emails. **Dans toutes les salles, y compris publiques et en développement, l’autorisation explicite d’un administrateur pour chaque joueur est obligatoire.** Ni un lien, ni un code, ni une invitation, ni une ancienne participation ne remplacent cette approbation. L’animateur de la salle et les administrateurs gardent leur accès de gestion.
 - **Mes quiz → Mes sessions** affiche le lien d’invitation sélectionnable et un bouton de copie. Pour les quiz de visibilité **Code ou invitation**, le code est aussi affiché et copiable ; un quiz public ne nécessite pas de code, un quiz privé reste réservé aux emails invités. Les codes ne sont pas exposés aux autres joueurs.
-- Le lien d’invitation (qui contient déjà le code si nécessaire) se partage en un clic vers WhatsApp, Telegram, Gmail, email, SMS ou toute autre application du téléphone (« Autres applications »), depuis **Mes sessions** ou le bouton **Inviter un ami** de la salle. En cliquant sur le lien, un joueur connecté entre directement dans la salle ; un visiteur sans compte est invité à s’inscrire (ou à se connecter), puis, après la vérification de son email, il arrive automatiquement dans la salle. L’invitation est mémorisée 7 jours dans le navigateur et transportée dans le lien de vérification envoyé par email.
+- Le lien d’invitation (qui contient déjà le code si nécessaire) se partage en un clic vers WhatsApp, Telegram, Gmail, email, SMS ou toute autre application du téléphone (« Autres applications »), depuis **Mes sessions** ou le bouton **Inviter un ami** de la salle. En cliquant sur le lien, un joueur autorisé rejoint la salle ; un visiteur crée ou vérifie d’abord son compte. Sans approbation, l’entrée est refusée avec un avertissement et une demande est enregistrée pour l’administrateur. L’invitation est mémorisée 7 jours dans le navigateur et transportée dans le lien de vérification envoyé par email.
 - Pour que le lien fonctionne chez les autres, l’application doit être ouverte via une adresse accessible par eux (domaine public ou IP du réseau, voir `APP_URL`) : un lien `localhost` ne fonctionne que sur votre propre ordinateur.
 - **Gérer les joueurs**, dans **Mes sessions** ou dans la salle de l’animateur, permet à l’animateur ou à un administrateur d’exclure un participant avec confirmation, même après la fin du quiz. L’exclusion est permanente pour cette session seulement : retour, questions, réponses et connexion à la salle sont bloqués. Les réponses et scores acquis sont conservés dans l’historique, les statistiques, les classements et le PDF (avec mention de l’exclusion dans le relevé). Une partie en cours est arrêtée pour ce joueur. Son compte et ses autres sessions ne sont pas suspendus.
 - Direct : salle d’attente, lancement et questions synchronisés, classement après chaque timer, correction finale.
@@ -61,12 +62,15 @@ Sur un autre appareil du même réseau, remplacez `localhost` par l’IP du PC e
 - Relevé collectif des résultats téléchargeable en PDF depuis la fin du quiz, l’historique et l’administration : classement, ID permanent de chaque joueur, scores sur 1 000, bonnes réponses, réponses enregistrées et dates de fin. Les longs classements sont répartis sur plusieurs pages. En différé, le relevé est provisoire tant que la session reste ouverte.
 - Administration : rôles, suspension/réactivation, signalements et modération. Masquer un quiz clôture ses sessions.
 - Administration → **Résultats collectifs → Gérer les joueurs** donne à l’administrateur l’accès aux joueurs de n’importe quelle session. En plus de l’exclusion, il peut **supprimer** un joueur non autorisé (action réservée aux administrateurs, avec confirmation) : sa participation, ses réponses et son score sont effacés définitivement (il disparaît du classement, de l’historique et du PDF de cette session) et son retour dans la session reste bloqué. Son compte et ses autres sessions ne sont pas touchés.
+- Administration → **Résultats collectifs et autorisations d’entrée → Gérer les joueurs → Autorisations d’entrée** permet d’approuver un compte actif et vérifié par son email, ou une demande d’entrée, pour cette salle uniquement. L’approbation ajoute aussi l’adresse aux invitations pour les salles privées. Les créateurs et joueurs ne peuvent pas approuver eux-mêmes des accès. Un refus ou une révocation efface définitivement la participation, les réponses et le score dans cette salle, même après la fin du quiz, sans supprimer le compte ni les participations autorisées dans les autres salles. Le joueur connecté reçoit immédiatement un avertissement ; le polling REST bloque aussi son accès.
+
+**Attention à la mise à jour :** au prochain démarrage du serveur, toutes les anciennes participations sans approbation enregistrée dans `session_access` sont supprimées avec leurs réponses et scores (sauf celles de l’animateur de la salle et des administrateurs). Sauvegardez la base avant le déploiement. Les demandes correspondantes restent visibles dans l’administration. Cette suppression est définitive ; une nouvelle approbation ne restaure pas les réponses effacées.
 
 Un quiz ayant déjà des sessions ne peut plus être modifié : sa duplication préserve les questions liées aux résultats existants. Les nouveaux joueurs ne peuvent plus rejoindre un direct commencé ; les participants déjà inscrits peuvent revenir.
 
 ## Stockage et architecture
 
-React + TypeScript + Vite, Express + Socket.IO, tables relationnelles `users`, `auth_tokens`, `quizzes`, `questions`, `answers`, `sessions`, `participations`, `participation_answers`, `session_exclusions`, `invitations`, `reports`.
+React + TypeScript + Vite, Express + Socket.IO, tables relationnelles `users`, `auth_tokens`, `oauth_requests`, `quizzes`, `questions`, `answers`, `sessions`, `participations`, `participation_answers`, `session_exclusions`, `session_access`, `invitations`, `reports`.
 
 Sans `DATABASE_URL`, SQLite local (WAL et transactions sérialisées). Avec `DATABASE_URL`, PostgreSQL et verrouillage des sessions pour sérialiser les réponses/avancements concurrents. Les tables sont créées au démarrage. SQLite et PostgreSQL sont des stockages distincts ; changer de moteur ne migre pas automatiquement les données.
 
@@ -107,14 +111,16 @@ APPLE_KEY_ID=...
 APPLE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----" # \n conservés sur une ligne
 ```
 
-Déclarez l’URL de redirection `APP_URL/api/auth/oauth/google/callback` (respectivement `.../apple/callback`) chez chaque fournisseur. Un compte existant est retrouvé par son adresse email ; sinon un compte joueur vérifié est créé automatiquement.
+Déclarez l’URL de redirection `APP_URL/api/auth/oauth/google/callback` (respectivement `.../apple/callback`) chez chaque fournisseur. Un compte existant est retrouvé par son adresse email ; sinon un compte joueur vérifié est créé automatiquement. Si le compte local n’était pas vérifié, son ancien mot de passe et tous ses liens et sessions sont révoqués avant la connexion OAuth. Le propriétaire peut ensuite définir un mot de passe avec « Mot de passe oublié ».
+
+Les tentatives OAuth expirent après 10 minutes, sont liées au navigateur initiateur par un cookie HttpOnly et ne peuvent être utilisées qu’une fois. Google utilise aussi PKCE S256. Apple exige `APP_URL` en HTTPS, même pour les essais locaux : son callback POST nécessite un cookie `SameSite=None; Secure`. Les tentatives sont stockées dans la table `oauth_requests` de la base partagée et les tentatives expirées sont nettoyées au prochain démarrage d’une connexion OAuth.
 
 En production :
 
 1. Définir `NODE_ENV=production`, `APP_URL=https://votre-domaine`, `JWT_SECRET` aléatoire (au moins 32 caractères), SMTP et `DATABASE_URL`.
 2. Exécuter `npm run build`, puis `npm start` : Express sert l’interface compilée et l’API sur le même domaine.
 3. Placer un reverse proxy HTTPS devant le serveur, avec support WebSocket. Les cookies sont `Secure` en production.
-4. Ne pas initialiser les comptes de démonstration. Créer un compte vérifié et lui attribuer le rôle administrateur par une opération contrôlée en base.
+4. Ne pas initialiser les comptes de démonstration ni déployer une base qui les contient. Créer un compte vérifié et lui attribuer le rôle administrateur par une opération contrôlée en base. Avec `NODE_ENV=production`, chaque inscription publique crée uniquement un joueur ; une demande du rôle créateur ou administrateur est rejetée par l’API. Un administrateur attribue ensuite les rôles depuis **Administration → Utilisateurs**. Les comptes créateurs et administrateurs autorisés conservent leurs fonctions ; les joueurs ne voient pas les menus, boutons ou fenêtres de création et d’administration. Les contrôles serveur s’appliquent aussi aux anciens créateurs rétrogradés en joueurs.
 5. Sauvegarder PostgreSQL, limiter l’exposition réseau et ajouter une politique de rétention/supervision adaptée. Adapter explicitement `trust proxy` au proxy réel avant d’utiliser une limitation par IP derrière celui-ci.
 
 Sans secret configuré en développement, le serveur génère un secret dans `data/auth-secret`. Ne jamais publier ce fichier, `.env` ou les données de comptes.
@@ -143,6 +149,7 @@ Préfixe `/api`. Toutes les routes hors `/auth/*` et `/health` exigent `Authoriz
 | GET/POST `/sessions`, POST `/sessions/:id/join` | Planification et participation |
 | GET `/sessions/:id` | État personnel et correction |
 | POST `/sessions/:id/answer`, `/next`, `/control` | Jeu et pilotage |
+| GET/POST `/sessions/:id/access` | Demandes et décisions d’entrée par un administrateur (`email`, `approved`) |
 | GET `/leaderboard`, `/quizzes/:id/stats` | Classements et statistiques |
 | POST `/quizzes/:id/report`, GET `/admin` | Signalements et administration |
 

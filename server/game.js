@@ -1,5 +1,5 @@
 import { randomUUID, randomInt, createHash } from 'node:crypto';
-import { assert, HttpError } from './auth.js';
+import { assert, HttpError, canManageQuiz } from './auth.js';
 import { quizScore, questionPoints } from './scores.js';
 
 export function shuffle(items) {
@@ -15,6 +15,9 @@ export async function getQuestions(db, quizId) {
   return questions;
 }
 export function createGame(db, { clock = Date.now } = {}) {
+  const unauthorized = () => Object.assign(new HttpError(403,
+    'Avertissement : vous ne pouvez pas entrer dans cette salle de quiz sans l’autorisation explicite d’un administrateur. Votre participation, vos réponses et votre score dans cette salle ont été supprimés s’ils existaient. Votre compte est conservé. Demandez l’autorisation à un administrateur.'),
+    { code: 'SESSION_UNAUTHORIZED' });
   async function load(tx, id) {
     const [session] = await tx.query(`SELECT * FROM sessions WHERE id=?${tx.lock}`, [id]);
     assert(session, 404, 'Session introuvable.');
@@ -23,7 +26,7 @@ export function createGame(db, { clock = Date.now } = {}) {
   }
   async function allowed(tx, session, quiz, user, code) {
     await notExcluded(tx, session.id, user.id);
-    if (quiz.owner_id === user.id || user.role === 'admin' || quiz.visibility === 'public') return;
+    if (canManageQuiz(user, quiz.owner_id) || quiz.visibility === 'public') return;
     const invitation = await tx.query('SELECT id FROM invitations WHERE session_id=? AND email=?', [session.id, user.email]);
     const previous = await tx.query('SELECT id FROM participations WHERE session_id=? AND user_id=?', [session.id, user.id]);
     if (quiz.visibility === 'private') {
@@ -37,10 +40,34 @@ export function createGame(db, { clock = Date.now } = {}) {
     const [exclusion] = await tx.query('SELECT user_id FROM session_exclusions WHERE session_id=? AND user_id=?', [sessionId, userId]);
     if (exclusion) throw Object.assign(new HttpError(403, 'Vous avez été exclu de cette session. Vos résultats sont conservés.'), { code: 'SESSION_EXCLUDED' });
   }
+  async function deleteParticipation(tx, id, userId) {
+    await tx.query('DELETE FROM participation_answers WHERE participation_id IN (SELECT id FROM participations WHERE session_id=? AND user_id=?)', [id, userId]);
+    await tx.query('DELETE FROM participations WHERE session_id=? AND user_id=?', [id, userId]);
+  }
+  async function checkApproval(tx, id, quiz, user) {
+    if (canManageQuiz(user, quiz.owner_id)) return true;
+    const [access] = await tx.query('SELECT status FROM session_access WHERE session_id=? AND user_id=?', [id, user.id]);
+    if (access?.status === 'approved') return true;
+    await deleteParticipation(tx, id, user.id);
+    await tx.query(`INSERT INTO session_access (session_id,user_id,requested_at) VALUES (?,?,?)
+      ON CONFLICT (session_id,user_id) DO NOTHING`, [id, user.id, clock()]);
+    return false;
+  }
+  async function participantTransaction(id, user, work) {
+    const result = await db.transaction(async tx => {
+      const { quiz } = await load(tx, id);
+      await notExcluded(tx, id, user.id);
+      if (!await checkApproval(tx, id, quiz, user)) return { denied: true };
+      return { value: await work(tx) };
+    });
+    // Refuser après le commit pour ne pas annuler la suppression de la participation.
+    if (result.denied) throw unauthorized();
+    return result.value;
+  }
   async function managed(tx, id, user) {
     const result = await load(tx, id);
     await notExcluded(tx, id, user.id);
-    assert(user.id === result.quiz.owner_id || user.role === 'admin', 403, 'Seul l’animateur ou un administrateur peut gérer les joueurs.');
+    assert(canManageQuiz(user, result.quiz.owner_id), 403, 'Seul l’animateur ou un administrateur peut gérer les joueurs.');
     return result;
   }
   async function score(tx, p, q, answerId, start) {
@@ -81,6 +108,51 @@ export function createGame(db, { clock = Date.now } = {}) {
     }
   }
   return {
+    async requireApproval(id, user) {
+      return participantTransaction(id, user, async () => {});
+    },
+    async enforceApprovals() {
+      const changed = [];
+      const sessions = await db.query('SELECT DISTINCT session_id AS id FROM participations');
+      for (const { id } of sessions) {
+        const removed = await db.transaction(async tx => {
+          const { quiz } = await load(tx, id);
+          const users = await tx.query('SELECT u.* FROM users u JOIN participations p ON p.user_id=u.id WHERE p.session_id=?', [id]);
+          let removed = false;
+          for (const user of users) if (!await checkApproval(tx, id, quiz, user)) removed = true;
+          return removed;
+        });
+        if (removed) changed.push(id);
+      }
+      return changed;
+    },
+    async accessRequests(id, user) {
+      assert(user.role === 'admin', 403, 'Seul un administrateur peut autoriser l’entrée dans une salle.');
+      return db.transaction(async tx => {
+        await load(tx, id);
+        return tx.query(`SELECT u.id,u.email,u.pseudo,u.avatar,a.status,a.requested_at,a.decided_at
+          FROM session_access a JOIN users u ON u.id=a.user_id WHERE a.session_id=? ORDER BY a.requested_at,u.pseudo`, [id]);
+      });
+    },
+    async decideAccess(id, user, email, approved) {
+      assert(user.role === 'admin', 403, 'Seul un administrateur peut autoriser l’entrée dans une salle.');
+      return db.transaction(async tx => {
+        const { quiz } = await load(tx, id);
+        const [player] = await tx.query('SELECT * FROM users WHERE email=?', [email]);
+        assert(player, 400, 'Cette adresse ne correspond à aucun compte.');
+        if (approved) assert(!player.disabled && player.verified, 400, 'Cette adresse doit correspondre à un compte actif et vérifié.');
+        assert(!canManageQuiz(player, quiz.owner_id), 400, 'L’animateur et les administrateurs disposent déjà de l’accès à la salle.');
+        if (approved) await notExcluded(tx, id, player.id);
+        await tx.query(`INSERT INTO session_access (session_id,user_id,status,requested_at,decided_by,decided_at)
+          VALUES (?,?,?,?,?,?) ON CONFLICT (session_id,user_id) DO UPDATE
+          SET status=excluded.status,decided_by=excluded.decided_by,decided_at=excluded.decided_at`,
+          [id, player.id, approved ? 'approved' : 'denied', clock(), user.id, clock()]);
+        if (approved) {
+          await tx.query(`INSERT INTO invitations (id,session_id,email) VALUES (?,?,?)
+            ON CONFLICT (session_id,email) DO NOTHING`, [randomUUID(), id, player.email]);
+        } else await deleteParticipation(tx, id, player.id);
+      });
+    },
     async players(id, user) {
       return db.transaction(async tx => {
         const { session, quiz } = await managed(tx, id, user);
@@ -104,6 +176,7 @@ export function createGame(db, { clock = Date.now } = {}) {
         assert(player, 404, 'Ce joueur ne participe pas à cette session.');
         await tx.query('DELETE FROM participation_answers WHERE participation_id=?', [player.id]);
         await tx.query('DELETE FROM participations WHERE id=?', [player.id]);
+        await tx.query("UPDATE session_access SET status='denied',decided_by=?,decided_at=? WHERE session_id=? AND user_id=?", [user.id, clock(), id, playerId]);
         // The exclusion row keeps the removed player from joining again with the same link or code.
         await tx.query(`INSERT INTO session_exclusions (session_id,user_id,excluded_by,excluded_at)
           VALUES (?,?,?,?) ON CONFLICT (session_id,user_id) DO NOTHING`, [id, playerId, user.id, clock()]);
@@ -121,7 +194,7 @@ export function createGame(db, { clock = Date.now } = {}) {
       });
     },
     async join(id, user, code) {
-      return db.transaction(async tx => {
+      return participantTransaction(id, user, async tx => {
         const { session, quiz } = await load(tx, id);
         await allowed(tx, session, quiz, user, code);
         const [existing] = await tx.query('SELECT * FROM participations WHERE session_id=? AND user_id=?', [id, user.id]);
@@ -140,7 +213,7 @@ export function createGame(db, { clock = Date.now } = {}) {
       });
     },
     async begin(id, user) {
-      return db.transaction(async tx => {
+      return participantTransaction(id, user, async tx => {
         const { session } = await load(tx, id);
         await notExcluded(tx, id, user.id);
         assert(session.mode === 'async', 400, 'Cette session se joue en direct : l’animateur lance la partie pour tout le monde.');
@@ -155,7 +228,7 @@ export function createGame(db, { clock = Date.now } = {}) {
       return db.transaction(async tx => {
         const { session, quiz } = await load(tx, id);
         await notExcluded(tx, id, user.id);
-        assert(user.id === quiz.owner_id || user.role === 'admin', 403, 'Seul l’animateur peut piloter cette session.');
+        assert(canManageQuiz(user, quiz.owner_id), 403, 'Seul l’animateur peut piloter cette session.');
         assert(session.mode === 'live', 400, 'Cette session se joue à votre rythme.');
         await expireLive(tx, session);
         assert(clock() < Number(session.closes_at), 409, 'Cette session est fermée.');
@@ -172,7 +245,7 @@ export function createGame(db, { clock = Date.now } = {}) {
       });
     },
     async answer(id, user, answerId, questionId) {
-      return db.transaction(async tx => {
+      return participantTransaction(id, user, async tx => {
         const { session } = await load(tx, id);
         await notExcluded(tx, id, user.id);
         await expireLive(tx, session);
@@ -191,7 +264,7 @@ export function createGame(db, { clock = Date.now } = {}) {
       });
     },
     async next(id, user) {
-      return db.transaction(async tx => {
+      return participantTransaction(id, user, async tx => {
         const { session } = await load(tx, id);
         await notExcluded(tx, id, user.id);
         assert(session.mode === 'async' && clock() < Number(session.closes_at), 409, 'La session est fermée ou en direct.');
@@ -202,12 +275,12 @@ export function createGame(db, { clock = Date.now } = {}) {
       });
     },
     async snapshot(id, user) {
-      return db.transaction(async tx => {
+      return participantTransaction(id, user, async tx => {
         const { session, quiz } = await load(tx, id);
         await allowed(tx, session, quiz, user);
         await expireLive(tx, session);
         let [p] = await tx.query('SELECT * FROM participations WHERE session_id=? AND user_id=?', [id, user.id]);
-        const host = quiz.owner_id === user.id || user.role === 'admin';
+        const host = canManageQuiz(user, quiz.owner_id);
         assert(p || host, 403, 'Rejoignez la session pour voir les questions.');
         if (clock() >= Number(session.closes_at) && session.status !== 'ended') {
           await finish(tx, id); session.status = 'ended';

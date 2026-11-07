@@ -53,7 +53,11 @@ export function Game({ id, user, exit, complete, invitationCode }: { id: string;
     s.on('session:excluded', (value: { id: string; error: string }) => { if (active && value.id === id) deny(value.error); });
     s.on('connect', () => {
       setConnected(true);
-      s.emit('session:join', { id }, (reply: { error?: string }) => { if (reply.error && active) setError(reply.error); });
+      s.emit('session:join', { id }, (reply: { error?: string; code?: string }) => {
+        if (!reply.error || !active) return;
+        if (reply.code === 'SESSION_UNAUTHORIZED' || reply.code === 'SESSION_EXCLUDED') deny(reply.error);
+        else setError(reply.error);
+      });
     });
     s.on('disconnect', () => { if (active) setConnected(false); });
     s.on('connect_error', () => { if (active) setConnected(false); });
@@ -69,7 +73,11 @@ export function Game({ id, user, exit, complete, invitationCode }: { id: string;
   async function action(path: string, body?: unknown) {
     setBusy(true); setError('');
     try { await api(`/sessions/${id}/${path}`, 'POST', body || {}); setState(await api<GameState>(`/sessions/${id}`)); }
-    catch (e) { setError(message(e)); } finally { setBusy(false); }
+    catch (e) {
+      if (e instanceof ApiError && e.status === 403) {
+        setAccessError(e.message); setState(null); setManagePlayers(false); socket.current?.disconnect(); completeRef.current();
+      } else setError(message(e));
+    } finally { setBusy(false); }
   }
   async function copy() {
     try { await navigator.clipboard.writeText(sessionLink(id, invitationCode)); setCopied(true); }
@@ -96,7 +104,7 @@ export function Game({ id, user, exit, complete, invitationCode }: { id: string;
     {sharing && <div className="panel game-share"><label>Lien d’invitation<input readOnly value={sessionLink(id, invitationCode)} onFocus={e => e.currentTarget.select()} /></label>
       <button className="text-button" onClick={copy}><Copy size={14} />{copied ? 'Lien copié' : 'Copier le lien'}</button>
       <ShareButtons link={sessionLink(id, invitationCode)} title={state.title} />
-      <small>Vos amis arrivent directement dans cette salle. Sans compte, ils créeront d’abord le leur.</small></div>}
+      <small>Vos amis doivent avoir un compte et l’autorisation explicite d’un administrateur pour cette salle.</small></div>}
     {error && <div className="alert error" role="alert">{error}</div>}
     {connectionError && <div className="alert error" role="alert">Connexion interrompue : {connectionError} Nouvelle tentative automatique…</div>}
     <div className="game-layout"><section className="game-panel">
@@ -129,6 +137,6 @@ export function Game({ id, user, exit, complete, invitationCode }: { id: string;
     {finished && state.correction && <section className="panel correction"><div className="section-header"><h2>Un peu plus de connaissances</h2><span className="small-note">Votre correction détaillée</span></div>
       {state.correction.map((c, i) => <div className="correction-row" key={i}><span className={`correction-number ${c.points ? 'good' : ''}`}>{i + 1}</span><div><h3>{c.text}</h3><p>Votre réponse : <strong>{c.selected || 'Aucune réponse'}</strong> • Bonne réponse : <strong>{c.correct}</strong></p><small>{c.explanation}</small></div><strong className={c.points ? 'text-green' : 'muted'}>+{c.points}</strong></div>)}
     </section>}
-    {managePlayers && <SessionPlayers id={id} title={state.title} close={closePlayers} changed={() => completeRef.current()} />}
+    {managePlayers && <SessionPlayers id={id} title={state.title} close={closePlayers} changed={() => completeRef.current()} administrator={user.role === 'admin'} />}
   </div>;
 }

@@ -48,7 +48,7 @@ export function Auth({ initial = 'login', token, invite, close, onLogin }: {
   return <Modal title={titles[mode]} close={close}>
     <AnimatedBanner key={mode} />
     {invite && ['login', 'register', 'verify'].includes(mode) && <div className="alert info invite-notice" role="note">
-      Vous avez été invité à un quiz. {mode === 'register' ? 'Créez votre compte (ou connectez-vous si vous en avez déjà un) : vous entrerez ensuite directement dans la salle.' : 'Connectez-vous pour entrer directement dans la salle du quiz.'}</div>}
+      Vous avez été invité à un quiz. {mode === 'register' ? 'Créez votre compte (ou connectez-vous si vous en avez déjà un).' : 'Connectez-vous pour rejoindre le quiz.'} Un administrateur doit ensuite autoriser votre entrée dans cette salle.</div>}
     <form onSubmit={submit} className="form">
       {mode === 'register' && <label>Votre pseudo<div className="input-wrap"><UserRound size={17} /><input required minLength={2} maxLength={30} value={pseudo} onChange={e => setPseudo(e.target.value)} placeholder="Comment vous appelle-t-on ?" autoComplete="nickname" /></div></label>}
       {!['verify', 'reset'].includes(mode) && <label>Adresse email<div className="input-wrap"><Mail size={17} /><input required type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="vous@exemple.fr" autoComplete="email" /></div></label>}
@@ -56,7 +56,7 @@ export function Auth({ initial = 'login', token, invite, close, onLogin }: {
         <button type="button" className="icon-button password-toggle" onClick={() => setShowPassword(visible => !visible)} aria-label={showPassword ? 'Masquer le mot de passe' : 'Afficher le mot de passe'} aria-pressed={showPassword}>
           {showPassword ? <EyeOff size={18} aria-hidden="true" /> : <Eye size={18} aria-hidden="true" />}
         </button></div></label>}
-      {mode === 'register' && <label>Je souhaite<select value={role} onChange={e => setRole(e.target.value)}><option value="player">Jouer et apprendre</option><option value="creator">Créer et animer des quiz</option></select></label>}
+      {mode === 'register' && !import.meta.env.PROD && <label>Je souhaite<select value={role} onChange={e => setRole(e.target.value)}><option value="player">Jouer et apprendre</option><option value="creator">Créer et animer des quiz</option></select></label>}
       {error && <div className="alert error" role="alert">{error}{knownEmail && <> <button type="button" className="text-button" onClick={() => change('login')}>Se connecter avec cette adresse</button></>}</div>}
       {success && <div className="alert success" role="status"><CheckCircle2 size={18} />{success}</div>}
       {mode === 'verify' && !success && <p>Confirmez votre adresse email pour activer votre compte.</p>}
@@ -70,8 +70,8 @@ export function Auth({ initial = 'login', token, invite, close, onLogin }: {
       </div>}
     </form>
     {mode === 'login' && <><div className="auth-links"><button onClick={() => change('forgot')}>Mot de passe oublié ?</button><button onClick={() => change('resend')}>Email non reçu ?</button></div>
-      <div className="demo-box"><strong>Découvrir avec un compte de démonstration</strong><div>{[['Joueur', 'alex'], ['Créatrice', 'camille'], ['Admin', 'admin']].map(([label, name]) =>
-        <button key={name} onClick={() => { setEmail(`${name}@demo.fr`); setPassword('DemoQuiz2026!'); }}>{label}</button>)}</div><small>Disponible après l’initialisation des données de démonstration.</small></div></>}
+      {!import.meta.env.PROD && <div className="demo-box"><strong>Découvrir avec un compte de démonstration</strong><div>{[['Joueur', 'alex'], ['Créatrice', 'camille'], ['Admin', 'admin']].map(([label, name]) =>
+        <button key={name} onClick={() => { setEmail(`${name}@demo.fr`); setPassword('DemoQuiz2026!'); }}>{label}</button>)}</div><small>Disponible après l’initialisation des données de démonstration.</small></div>}</>}
     <div className="auth-bottom">{mode === 'login' ? <>Pas encore de compte ? <button onClick={() => change('register')}>Inscrivez-vous</button></> :
       mode === 'register' && invite ? <>Déjà inscrit ? <button onClick={() => change('login')}>Connectez-vous</button></> :
       <button onClick={() => change('login')}><ArrowLeft size={14} />Retour à la connexion</button>}</div>

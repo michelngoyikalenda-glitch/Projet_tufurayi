@@ -6,7 +6,7 @@ import { randomUUID, randomBytes } from 'node:crypto';
 import { resolve } from 'node:path';
 import { existsSync } from 'node:fs';
 import { z } from 'zod';
-import { createAuth, assert, safeUser, emailSchema, HttpError } from './auth.js';
+import { createAuth, assert, safeUser, emailSchema, HttpError, canManageQuiz } from './auth.js';
 import { createGame, getQuestions, shuffle } from './game.js';
 import { isAllowedOrigin } from './origin.js';
 import { quizScore } from './scores.js';
@@ -43,7 +43,9 @@ export function createApp(db, secret, options = {}) {
   app.use('/api', (req, _res, next) => {
     const origin = req.headers.origin;
     const expected = options.origin || process.env.APP_URL || 'http://localhost:5173';
-    if (origin && !isAllowedOrigin(origin, expected)) return next(new HttpError(403, 'Origine de la requête non autorisée.'));
+    const appleCallback = req.method === 'POST' && req.path === '/auth/oauth/apple/callback' &&
+      origin === 'https://appleid.apple.com';
+    if (origin && !appleCallback && !isAllowedOrigin(origin, expected)) return next(new HttpError(403, 'Origine de la requête non autorisée.'));
     next();
   });
   const authLimit = rateLimit({ windowMs: 15 * 60000, limit: options.test ? 10000 : 30,
@@ -102,13 +104,14 @@ export function createApp(db, secret, options = {}) {
     const quizzes = await db.query(`SELECT q.id,q.title,q.description,q.category,q.cover,q.visibility,q.published,q.owner_id,
       u.pseudo AS owner,(SELECT COUNT(*) FROM questions WHERE quiz_id=q.id) AS question_count
       FROM quizzes q JOIN users u ON u.id=q.owner_id
-      WHERE (q.published=1 AND q.visibility='public') OR q.owner_id=? ORDER BY q.created_at DESC`, [req.user.id]);
+      WHERE (q.published=1 AND q.visibility='public') OR (q.owner_id=? AND ?=1) ORDER BY q.created_at DESC`,
+      [req.user.id, Number(['creator', 'admin'].includes(req.user.role))]);
     res.json(quizzes);
   });
   app.get('/api/quizzes/:id', async (req, res) => {
     const [q] = await db.query('SELECT * FROM quizzes WHERE id=?', [req.params.id]);
     assert(q, 404, 'Quiz introuvable.');
-    const owner = q.owner_id === req.user.id || req.user.role === 'admin';
+    const owner = canManageQuiz(req.user, q.owner_id);
     assert(owner || (q.published && q.visibility === 'public'), 403, 'Ce quiz est privé.');
     if (owner) q.questions = await getQuestions(db, q.id);
     else delete q.invitation_code;
@@ -151,17 +154,19 @@ export function createApp(db, secret, options = {}) {
       u.pseudo AS owner,(SELECT COUNT(*) FROM questions WHERE quiz_id=q.id) AS question_count,
       (SELECT COUNT(*) FROM participations WHERE session_id=s.id) AS player_count,
       (SELECT status FROM participations WHERE session_id=s.id AND user_id=?) AS participation_status,
-      CASE WHEN q.owner_id=? THEN q.invitation_code ELSE NULL END AS invitation_code
+      CASE WHEN q.owner_id=? AND ?=1 THEN q.invitation_code ELSE NULL END AS invitation_code
       FROM sessions s JOIN quizzes q ON q.id=s.quiz_id JOIN users u ON u.id=q.owner_id
       LEFT JOIN invitations i ON i.session_id=s.id AND i.email=?
       LEFT JOIN participations p ON p.session_id=s.id AND p.user_id=?
-      WHERE (q.owner_id=? OR p.id IS NOT NULL OR (q.published=1 AND (q.visibility='public' OR i.id IS NOT NULL)))
+      WHERE ((q.owner_id=? AND ?=1) OR p.id IS NOT NULL OR (q.published=1 AND (q.visibility='public' OR i.id IS NOT NULL)))
       AND NOT EXISTS (SELECT 1 FROM session_exclusions e WHERE e.session_id=s.id AND e.user_id=?)
-      ORDER BY s.created_at DESC`, [req.user.id, req.user.id, req.user.email, req.user.id, req.user.id, req.user.id]);
+      ORDER BY s.created_at DESC`, [req.user.id, req.user.id, Number(['creator', 'admin'].includes(req.user.role)),
+      req.user.email, req.user.id, req.user.id, Number(['creator', 'admin'].includes(req.user.role)), req.user.id]);
     res.json(rows.map(({ question_order, ...row }) => row));
   });
   app.get('/api/sessions/:id/report', async (req, res) => {
     const id = getId(req);
+    await game.requireApproval(id, req.user);
     const [excluded] = await db.query('SELECT user_id FROM session_exclusions WHERE session_id=? AND user_id=?', [id, req.user.id]);
     assert(!excluded, 403, 'Vous avez été exclu de cette session. Vos résultats sont conservés.');
     const [session] = await db.query(`SELECT s.id,s.mode,s.status,s.created_at,q.title,q.category,q.owner_id,
@@ -169,7 +174,7 @@ export function createApp(db, secret, options = {}) {
       FROM sessions s JOIN quizzes q ON q.id=s.quiz_id WHERE s.id=?`, [id]);
     assert(session, 404, 'Session introuvable.');
     const isParticipant = (await db.query('SELECT id FROM participations WHERE session_id=? AND user_id=?', [id, req.user.id])).length > 0;
-    assert(req.user.role === 'admin' || session.owner_id === req.user.id || isParticipant, 403, 'Vous ne pouvez pas consulter les résultats de cette session.');
+    assert(canManageQuiz(req.user, session.owner_id) || isParticipant, 403, 'Vous ne pouvez pas consulter les résultats de cette session.');
     const players = await db.query(`SELECT u.id,u.pseudo,p.score,p.status,p.finished_at,
       CASE WHEN EXISTS (SELECT 1 FROM session_exclusions e WHERE e.session_id=p.session_id AND e.user_id=p.user_id) THEN 1 ELSE 0 END AS excluded,
       COUNT(pa.id) AS responses,COALESCE(SUM(CASE WHEN pa.points>0 THEN 1 ELSE 0 END),0) AS correct
@@ -198,6 +203,15 @@ export function createApp(db, secret, options = {}) {
     res.status(201).json({ id });
   });
   const getId = req => z.uuid().parse(req.params.id);
+  app.get('/api/sessions/:id/access', admin, async (req, res) => res.json(await game.accessRequests(getId(req), req.user)));
+  app.post('/api/sessions/:id/access', admin, async (req, res) => {
+    const { email, approved } = z.object({ email: emailSchema, approved: z.boolean() }).parse(req.body);
+    const id = getId(req);
+    await game.decideAccess(id, req.user, email, approved);
+    await notify(id);
+    res.json({ message: approved ? 'Entrée autorisée par l’administrateur pour cette salle.'
+      : 'Entrée refusée. La participation, les réponses et le score dans cette salle ont été supprimés.' });
+  });
   app.get('/api/sessions/:id/players', async (req, res) => res.json(await game.players(getId(req), req.user)));
   app.post('/api/sessions/:id/players/:userId/exclude', async (req, res) => {
     const id = getId(req);
@@ -255,6 +269,7 @@ export function createApp(db, secret, options = {}) {
     const reports = await db.query('SELECT r.*,q.title,u.pseudo FROM reports r JOIN quizzes q ON q.id=r.quiz_id JOIN users u ON u.id=r.user_id ORDER BY r.created_at DESC');
     const sessions = await db.query(`SELECT s.id,s.mode,s.status,s.created_at,s.opens_at,s.closes_at,q.title,q.owner_id,u.pseudo AS owner,
       (SELECT COUNT(*) FROM participations WHERE session_id=s.id) AS player_count,
+      (SELECT COUNT(*) FROM session_access WHERE session_id=s.id AND status='pending') AS pending_access_count,
       (SELECT status FROM participations WHERE session_id=s.id AND user_id=?) AS participation_status
       FROM sessions s JOIN quizzes q ON q.id=s.quiz_id JOIN users u ON u.id=q.owner_id ORDER BY s.created_at DESC`, [req.user.id]);
     const [totals] = await db.query(`SELECT (SELECT COUNT(*) FROM quizzes) AS quizzes,
@@ -302,7 +317,8 @@ export function createApp(db, secret, options = {}) {
     if (error.code === '23505' || error.code === 'ERR_SQLITE_ERROR' && /UNIQUE/.test(error.message))
       return res.status(409).json({ error: 'Cette donnée existe déjà.' });
     if (!error.status || error.status >= 500) console.error(error);
-    res.status(error.status || 500).json({ error: error.status ? error.message : 'Une erreur serveur est survenue. Réessayez.' });
+    res.status(error.status || 500).json({ error: error.status ? error.message : 'Une erreur serveur est survenue. Réessayez.',
+      ...(error.code === 'SESSION_UNAUTHORIZED' || error.code === 'SESSION_EXCLUDED' ? { code: error.code } : {}) });
   });
   return { app, auth, game, setNotify(fn) { notify = fn; } };
 }

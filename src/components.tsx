@@ -90,6 +90,7 @@ export function QuizCover({ quiz, small = false }: { quiz: Pick<Quiz, 'category'
   </div>;
 }
 export function SessionCard({ session: s, onJoin, user }: { session: Session; onJoin: (s: Session) => void; user: User }) {
+  const owner = s.owner_id === user.id && (user.role === 'creator' || user.role === 'admin');
   const closed = Number(s.closes_at) <= Date.now() || s.status === 'ended';
   const upcoming = Number(s.opens_at) > Date.now();
   const completed = s.participation_status === 'finished';
@@ -100,9 +101,9 @@ export function SessionCard({ session: s, onJoin, user }: { session: Session; on
     <div className="quiz-card-body"><span className={`category-label text-${s.cover}`}>{s.category}</span><h3>{s.title}</h3>
       <p>{s.description}</p><div className="quiz-meta"><span><Shapes size={14} />{s.question_count} questions</span><span><Users size={14} />{s.player_count} joueur{s.player_count > 1 ? 's' : ''}</span></div>
       <div className="card-footer"><span><Avatar user={{ pseudo: s.owner, avatar: 'pink' }} size="xs" />{s.owner}</span>
-        <button className="card-play" onClick={() => onJoin(s)} disabled={closed && !s.participation_status || upcoming && s.owner_id !== user.id}
+        <button className="card-play" onClick={() => onJoin(s)} disabled={closed && !s.participation_status || upcoming && !owner}
           aria-label={`${canViewResults ? 'Résultats de' : closed ? 'Quiz terminé :' : 'Rejoindre'} ${s.title}`}>
-          {canViewResults ? 'Résultats' : closed ? 'Terminé' : upcoming ? 'Bientôt' : s.owner_id === user.id && s.mode === 'live' ? 'Animer' : s.participation_status ? 'Reprendre' : 'Jouer'}<ArrowUpRight size={16} />
+          {canViewResults ? 'Résultats' : closed ? 'Terminé' : upcoming ? 'Bientôt' : owner && s.mode === 'live' ? 'Animer' : s.participation_status ? 'Reprendre' : 'Jouer'}<ArrowUpRight size={16} />
         </button></div>{closed || completed ? <span className="status done">{closed ? 'Quiz terminé' : 'Vous avez terminé ce quiz'}</span> : upcoming && <div className="small-note">Ouverture le {date(s.opens_at)}</div>}
     </div>
   </article>;

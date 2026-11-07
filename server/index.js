@@ -11,6 +11,8 @@ import { isAllowedOrigin } from './origin.js';
 if (process.env.NODE_ENV === 'production' && !process.env.SMTP_HOST) throw new Error('SMTP_HOST est obligatoire en production.');
 const db = await openDatabase();
 const service = createApp(db, await getSecret());
+const cleaned = await service.game.enforceApprovals();
+if (cleaned.length) console.info(`Contrôle des autorisations : participations non autorisées supprimées dans ${cleaned.length} salle(s).`);
 const server = createServer(service.app);
 const origin = process.env.APP_URL || 'http://localhost:5173';
 const io = new Server(server, { cors: { origin: (requestOrigin, done) => done(null, !requestOrigin || isAllowedOrigin(requestOrigin, origin)), credentials: true }, maxHttpBufferSize: 10000,
@@ -37,9 +39,9 @@ async function notify(id) {
         ['finished', 'ended'].includes(state.state) ? 'game:end' : 'game:question';
       socket.emit(event, state);
     } catch (error) {
-      if (error.code === 'SESSION_EXCLUDED') {
+      if (error.code === 'SESSION_EXCLUDED' || error.code === 'SESSION_UNAUTHORIZED') {
         await socket.leave(id);
-        socket.emit('session:excluded', { id, error: error.message });
+        socket.emit('session:excluded', { id, error: error.message, code: error.code });
       } else if (error.status === 401) socket.disconnect(true);
       else { console.error('Diffusion de session :', error); socket.emit('game:error', { error: error.status ? error.message : 'Diffusion temporairement indisponible.' }); }
     }
@@ -63,13 +65,20 @@ io.on('connection', socket => {
       ack({ ok: true });
     } catch (error) {
       if (!error.status) console.error(error);
-      ack({ error: error.status ? error.message : 'Action impossible.' });
+      if (error.code === 'SESSION_UNAUTHORIZED' || error.code === 'SESSION_EXCLUDED') {
+        if (typeof payload?.id === 'string') {
+          await socket.leave(payload.id);
+          socket.emit('session:excluded', { id: payload.id, error: error.message, code: error.code });
+          await notify(payload.id);
+        }
+      }
+      ack({ error: error.status ? error.message : 'Action impossible.', code: error.code });
     }
   };
   socket.on('session:join', handle(async ({ id, code }) => {
     if (typeof id !== 'string' || id.length > 50 || code && (typeof code !== 'string' || code.length > 30)) throw Object.assign(new Error('Session invalide.'), { status: 400 });
     const snapshot = await service.game.snapshot(id, socket.data.user).catch(async error => {
-      if (error.status !== 403) throw error;
+      if (error.status !== 403 || error.code) throw error;
       await service.game.join(id, socket.data.user, code?.trim().toUpperCase());
       return service.game.snapshot(id, socket.data.user);
     });

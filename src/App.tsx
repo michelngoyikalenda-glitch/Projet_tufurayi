@@ -112,7 +112,7 @@ export default function App() {
   async function join(s: Session) {
     setJoinBusy(true); setError('');
     try {
-      if (!(s.owner_id === user?.id && s.mode === 'live') && !s.participation_status) await api(`/sessions/${s.id}/join`, 'POST', {});
+      if (!(creator && s.owner_id === user?.id && s.mode === 'live') && !s.participation_status) await api(`/sessions/${s.id}/join`, 'POST', {});
       setGameCode(''); setGameId(s.id); void load();
     } catch (e) { setError(message(e)); } finally { setJoinBusy(false); }
   }
@@ -179,7 +179,7 @@ export default function App() {
           <div className="landing-features"><div><span className="feature-icon purple"><Radio size={22} /></span><h3>Un défi en direct</h3><p>Une salle, un animateur et les mêmes questions pour tous. Vivez le jeu ensemble.</p></div><div><span className="feature-icon green"><Clock3 size={22} /></span><h3>Votre temps, votre rythme</h3><p>Jouez quand vous voulez et retrouvez votre progression sur tous vos appareils.</p></div><div><span className="feature-icon peach"><Trophy size={22} /></span><h3>Chaque progrès compte</h3><p>Des scores, un historique et des classements. Faites grandir vos connaissances.</p></div></div>
           <div className="section-header"><div><h2>Votre prochain terrain de découverte</h2><p>Un monde de questions. Quelle sera votre première aventure ?</p></div><button className="text-button" onClick={() => setAuthMode('register')}>Créer mon compte<ArrowUpRight size={17} /></button></div>
           <div className="landing-categories">{categories.map((c, i) => <button key={c} onClick={() => { setCategory(c); setAuthMode('register'); }}><span className={`category-tile tile-${i}`}><CategoryIcon category={c} size={35} /></span><strong>{c}</strong><ArrowUpRight size={15} /></button>)}</div>
-          <section className="landing-cta"><div><span className="eyebrow dark">POUR LES ESPRITS QUI AIMENT PARTAGER</span><h2>Vous avez les questions.<br />Nous avons le terrain de jeu.</h2><p>Créez votre quiz, invitez vos joueurs et animez votre prochaine session.</p></div><button className="button orange" onClick={() => setAuthMode('register')}>Lancer l’aventure<ArrowUpRight size={17} /></button></section>
+          {!import.meta.env.PROD && <section className="landing-cta"><div><span className="eyebrow dark">POUR LES ESPRITS QUI AIMENT PARTAGER</span><h2>Vous avez les questions.<br />Nous avons le terrain de jeu.</h2><p>Créez votre quiz, invitez vos joueurs et animez votre prochaine session.</p></div><button className="button orange" onClick={() => setAuthMode('register')}>Lancer l’aventure<ArrowUpRight size={17} /></button></section>}
         </div> : gameId ? <Game key={gameId} id={gameId} user={user} invitationCode={sessions.find(s => s.id === gameId)?.invitation_code || gameCode || undefined} exit={() => { setGameId(null); setPage('dashboard'); void load(); }} complete={load} /> :
         page === 'dashboard' ? <><div className="page-heading"><div><div className="eyebrow dark">UN NOUVEAU JOUR, UN NOUVEAU DÉFI</div><h1>Bonjour {user.pseudo}<span className="greeting-dot">.</span> <span className="wave">✦</span></h1><p>Un peu de jeu, un peu de savoir. Qu’allez-vous découvrir aujourd’hui ?</p></div>
           {creator && <button className="button secondary" onClick={() => setPopup({ type: 'editor' })}><Plus size={17} />Créer un quiz</button>}</div>
@@ -222,11 +222,11 @@ export default function App() {
         <Footer />
       </main></div>
     {authMode && <Auth initial={authMode} token={authToken} invite={invite} close={closeAuth} onLogin={u => { setUser(u); closeAuth(); setError(''); }} />}
-    {popup?.type === 'editor' && <Editor quizId={popup.id} duplicate={popup.duplicate} close={closePopup} saved={load} />}
-    {popup?.type === 'schedule' && <Schedule quiz={popup.quiz} close={closePopup} saved={() => { void load(); }} />}
-    {popup?.type === 'stats' && <Stats quiz={popup.quiz} close={closePopup} />}
-    {popup?.type === 'players' && <SessionPlayers id={popup.id} title={popup.title} close={closePopup} changed={() => void load()} />}
-    {popup?.type === 'join' && <Modal title="Rejoindre l’aventure" close={closePopup}><p className="modal-subtitle">Collez le lien partagé par votre animateur ou l’identifiant de la session.</p><form className="form" onSubmit={submitJoin}>
+    {creator && popup?.type === 'editor' && <Editor quizId={popup.id} duplicate={popup.duplicate} close={closePopup} saved={load} />}
+    {creator && popup?.type === 'schedule' && <Schedule quiz={popup.quiz} close={closePopup} saved={() => { void load(); }} />}
+    {creator && popup?.type === 'stats' && <Stats quiz={popup.quiz} close={closePopup} />}
+    {creator && popup?.type === 'players' && <SessionPlayers id={popup.id} title={popup.title} close={closePopup} changed={() => void load()} administrator={user?.role === 'admin'} />}
+    {popup?.type === 'join' && <Modal title="Rejoindre l’aventure" close={closePopup}><p className="modal-subtitle">Collez le lien partagé par votre animateur ou l’identifiant de la session. L’autorisation explicite d’un administrateur est obligatoire pour chaque joueur.</p><form className="form" onSubmit={submitJoin}>
       <label>Lien ou identifiant de session<input required value={joinId} onChange={e => setJoinId(e.target.value)} placeholder="https://…/?session=…" /></label><label>Code d’invitation (si nécessaire)<input maxLength={30} value={joinCode} onChange={e => setJoinCode(e.target.value)} placeholder="Le code communiqué par l’animateur" /><small>Un quiz privé est réservé aux adresses invitées. Pour un quiz sur invitation, utilisez le lien complet ou saisissez le code transmis par l’animateur.</small></label>
       {error && <div className="alert error" role="alert">{error}</div>}<button className="button orange full" disabled={joinBusy}>{joinBusy ? 'Connexion…' : 'Entrer dans la partie'}<ArrowRight size={17} /></button></form></Modal>}
     {popup?.type === 'report' && <Modal title="Signaler ce quiz" close={closePopup}><p className="modal-subtitle">Aidez-nous à garder un espace de jeu agréable pour tous.</p><form className="form" onSubmit={report}><label>Motif du signalement<textarea required minLength={10} maxLength={1000} rows={4} value={reportReason} onChange={e => setReportReason(e.target.value)} placeholder="Décrivez le contenu à vérifier…" /></label>{error && <div className="alert error" role="alert">{error}</div>}<button className="button orange full" disabled={joinBusy}>Envoyer le signalement<Flag size={16} /></button></form></Modal>}

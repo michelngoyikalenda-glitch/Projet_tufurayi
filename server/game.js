@@ -11,7 +11,13 @@ export function shuffle(items) {
 }
 export async function getQuestions(db, quizId) {
   const questions = await db.query('SELECT * FROM questions WHERE quiz_id=? ORDER BY position', [quizId]);
-  for (const q of questions) q.answers = await db.query('SELECT * FROM answers WHERE question_id=? ORDER BY id', [q.id]);
+  for (const q of questions) {
+    q.mediaUrl = q.media_url;
+    q.mediaType = q.media_type;
+    delete q.media_url;
+    delete q.media_type;
+    q.answers = await db.query('SELECT * FROM answers WHERE question_id=? ORDER BY id', [q.id]);
+  }
   return questions;
 }
 export function createGame(db, { clock = Date.now } = {}) {
@@ -334,6 +340,7 @@ export function createGame(db, { clock = Date.now } = {}) {
         });
         result.answered = Boolean(response);
         result.question = { id: q.id, text: q.text, duration: q.duration, endsAt: startedAt + q.duration * 1000,
+          mediaUrl: q.media_url, mediaType: q.media_type,
           answers: ordered.map(a => ({ id: a.id, text: a.text, ...(state === 'review' ? { correct: Boolean(a.correct) } : {}) })),
           ...(state === 'review' ? { explanation: q.explanation, selected: response?.answer_id,
             points: questionPoints(result.score, response?.points || 0, order.length) } : {}) };

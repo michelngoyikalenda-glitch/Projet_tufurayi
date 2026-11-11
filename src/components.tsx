@@ -1,7 +1,7 @@
-import { useEffect, useRef, type ReactNode } from 'react';
-import { X, ArrowUpRight, Clock3, Users, Radio, Globe2, Atom, Landmark, Code2, Trophy, Sparkles, Shapes } from 'lucide-react';
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import { X, ArrowUpRight, Clock3, Users, Radio, Globe2, Atom, Landmark, Code2, Trophy, Sparkles, Shapes, MessageSquareWarning, Send } from 'lucide-react';
 import type { Session, User, Quiz, BoardEntry } from './types';
-import { date, number } from './api';
+import { api, date, message, number } from './api';
 import { PrizeShowcase } from './PrizeShowcase';
 import logo from './assets/tufurayi-logo.png';
 import gmailIcon from './assets/contact-gmail.jpg';
@@ -10,9 +10,25 @@ import whatsappIcon from './assets/contact-whatsapp.jpg';
 export function Logo() {
   return <img className="tufurayi-logo" src={logo} alt="Tufurayi" width={1096} height={450} />;
 }
-export function Footer() {
+export function Footer({ user, onLogin }: { user?: User | null; onLogin?: () => void } = {}) {
   const whatsapp = '+243 85 425 64 90';
   const email = 'jeanpytufurayi9@gmail.com';
+  const [complaintOpen, setComplaintOpen] = useState(false);
+  const [category, setCategory] = useState('Réclamation');
+  const [receiptEmail, setReceiptEmail] = useState('');
+  const [details, setDetails] = useState('');
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState(false);
+  const [busy, setBusy] = useState(false);
+  async function submitComplaint(event: FormEvent) {
+    event.preventDefault();
+    setBusy(true); setError('');
+    try {
+      await api('/feedback', 'POST', { email: receiptEmail, category, message: details });
+      setSuccess(true); setDetails('');
+    } catch (e) { setError(message(e)); }
+    finally { setBusy(false); }
+  }
 
   return <footer className="main-footer contact-footer" role="contentinfo" aria-label="Informations et contacts">
     <div className="contact-footer-main">
@@ -23,7 +39,10 @@ export function Footer() {
       <div className="contact-footer-details">
         <span className="contact-footer-eyebrow">Nous sommes là pour vous</span>
         <h2>Restons en contact.</h2>
-        <p>Une question ou une idée ? Écrivez-nous, nous serons ravis de vous répondre.</p>
+        <p>Une question, une réclamation ou une idée ? Nous sommes à votre écoute.</p>
+        <button className="button orange footer-complaint-button" onClick={() => { setComplaintOpen(true); setError(''); setSuccess(false); setReceiptEmail(user?.email || ''); }}>
+          <MessageSquareWarning size={17} />Faire une réclamation ou un signalement
+        </button>
         <div className="contact-footer-links">
           <a className="contact-footer-link" href={`https://wa.me/${whatsapp.replace(/\D/g, '')}`}
             target="_blank" rel="noopener noreferrer" aria-label={`Écrire sur WhatsApp au ${whatsapp} (nouvel onglet)`}>
@@ -46,6 +65,24 @@ export function Footer() {
       </div>
       <div className="contact-footer-copyright">© {new Date().getFullYear()} Tufurayi. Tous droits réservés.</div>
     </div>
+    {complaintOpen && <Modal title="Réclamation et signalement" close={() => setComplaintOpen(false)}>
+      {!user ? <div className="form"><p>Connectez-vous à votre compte joueur pour transmettre une réclamation ou un signalement à l’administration.</p>
+        <button className="button orange full" onClick={() => { setComplaintOpen(false); onLogin?.(); }}>Se connecter<ArrowUpRight size={16} /></button></div> :
+        success ? <div className="form"><div className="alert success" role="status">Votre message a été transmis à l’administration. Merci de nous en avoir informés.</div>
+          <button className="button secondary full" onClick={() => { setSuccess(false); setComplaintOpen(false); }}>Fermer</button></div> :
+          <form className="form" onSubmit={submitComplaint}>
+            <p className="modal-subtitle">Votre message sera transmis à l’administration avec votre compte joueur.</p>
+            <label>Adresse e-mail pour recevoir l’accusé de réception<input required type="email" maxLength={254} autoComplete="email"
+              value={receiptEmail} onChange={event => setReceiptEmail(event.target.value)} placeholder="vous@exemple.fr" /></label>
+            <label>Type de demande<select value={category} onChange={event => setCategory(event.target.value)}>
+              <option>Réclamation</option><option>Fraude</option><option>Favoritisme</option><option>Insatisfaction</option><option>Autre</option>
+            </select></label>
+            <label>Décrivez la situation<textarea required minLength={10} maxLength={2000} rows={5} value={details}
+              onChange={event => setDetails(event.target.value)} placeholder="Expliquez votre réclamation, le signalement ou ce qui vous mécontente…" /></label>
+            {error && <div className="alert error" role="alert">{error}</div>}
+            <button className="button orange full" disabled={busy}>{busy ? 'Envoi…' : 'Envoyer à l’administration'}<Send size={16} /></button>
+          </form>}
+    </Modal>}
   </footer>;
 }
 export const categories = ['Culture générale', 'Sciences', 'Technologie', 'Histoire', 'Géographie', 'Sport'];
@@ -61,10 +98,12 @@ export function Empty({ title, text, action }: { title: string; text: string; ac
   return <div className="empty"><div className="empty-icon"><Sparkles size={30} /></div><h3>{title}</h3><p>{text}</p>{action}</div>;
 }
 export function Modal({ title, children, close, wide = false }: { title: string; children: ReactNode; close: () => void; wide?: boolean }) {
+  const closeRef = useRef(close);
+  closeRef.current = close;
   useEffect(() => {
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const handler = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') close();
+      if (event.key === 'Escape') closeRef.current();
       if (event.key === 'Tab') {
         const elements = Array.from(document.querySelectorAll<HTMLElement>('.modal button:not(:disabled), .modal input, .modal select, .modal textarea, .modal a[href]'));
         const first = elements[0], last = elements.at(-1);
@@ -76,7 +115,7 @@ export function Modal({ title, children, close, wide = false }: { title: string;
     document.body.style.overflow = 'hidden';
     document.querySelector<HTMLElement>('.modal button')?.focus();
     return () => { document.removeEventListener('keydown', handler); document.body.style.overflow = ''; previous?.focus(); };
-  }, [close]);
+  }, []);
   return <div className="modal-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) close(); }}>
     <section className={`modal ${wide ? 'wide' : ''}`} role="dialog" aria-modal="true" aria-label={title}>
       <header><h2>{title}</h2><button className="icon-button" onClick={close} aria-label="Fermer"><X size={21} /></button></header>{children}

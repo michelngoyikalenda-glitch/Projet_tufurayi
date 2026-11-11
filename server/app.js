@@ -5,6 +5,7 @@ import rateLimit from 'express-rate-limit';
 import { randomUUID, randomBytes } from 'node:crypto';
 import { resolve } from 'node:path';
 import { existsSync } from 'node:fs';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { z } from 'zod';
 import { createAuth, assert, safeUser, emailSchema, HttpError, canManageQuiz } from './auth.js';
 import { createGame, getQuestions, shuffle } from './game.js';
@@ -16,8 +17,11 @@ z.config(z.locales.fr());
 const questionSchema = z.object({
   text: z.string().trim().min(3, 'L’énoncé doit contenir au moins 3 caractères.').max(1000), explanation: z.string().max(2000).default(''),
   duration: z.number().int().min(5).max(120),
+  mediaUrl: z.string().regex(/^\/media\/[0-9a-f-]{36}\.(jpg|png|gif|webp|mp4|webm|mp3|wav|ogg|m4a|aac)$/).nullable().default(null),
+  mediaType: z.enum(['image', 'video', 'audio']).nullable().default(null),
   answers: z.array(z.object({ text: z.string().trim().min(1, 'Saisissez le texte de la réponse.').max(500), correct: z.boolean() })).min(2).max(6)
-}).refine(q => q.answers.filter(a => a.correct).length === 1, 'Chaque question doit avoir exactement une bonne réponse.');
+}).refine(q => q.answers.filter(a => a.correct).length === 1, 'Chaque question doit avoir exactement une bonne réponse.')
+  .refine(q => Boolean(q.mediaUrl) === Boolean(q.mediaType), 'Le média de la question est incomplet.');
 const quizSchema = z.object({
   title: z.string().trim().min(3, 'Le titre du quiz doit contenir au moins 3 caractères.').max(100), description: z.string().max(1000).default(''),
   category: z.enum(['Culture générale', 'Sciences', 'Technologie', 'Histoire', 'Géographie', 'Sport']),
@@ -34,11 +38,14 @@ const admin = (req, _res, next) => {
 
 export function createApp(db, secret, options = {}) {
   const app = express();
+  const mediaDir = resolve(options.mediaDir || 'data/media');
   const auth = createAuth(db, secret, options);
   const game = createGame(db, options);
   let notify = async () => {};
   app.disable('x-powered-by');
   app.use(helmet({ contentSecurityPolicy: { directives: { 'script-src': ["'self'"], 'img-src': ["'self'", 'data:'], 'connect-src': ["'self'"] } } }));
+  app.use('/media', express.static(mediaDir, { dotfiles: 'deny', index: false, immutable: true, maxAge: '1y',
+    setHeaders(res) { res.setHeader('X-Content-Type-Options', 'nosniff'); } }));
   app.use(express.json({ limit: '256kb' }), cookieParser());
   app.use('/api', (req, _res, next) => {
     const origin = req.headers.origin;
@@ -100,6 +107,20 @@ export function createApp(db, secret, options = {}) {
     LEFT JOIN participations p ON p.user_id=u.id AND p.status='finished'
     LEFT JOIN sessions s ON s.id=p.session_id
     WHERE u.disabled=0 GROUP BY u.id,u.pseudo,u.avatar HAVING COUNT(p.id)>0 ORDER BY score DESC,u.pseudo LIMIT 100`)));
+  const mediaTypes = {
+    'image/jpeg': ['image', 'jpg'], 'image/png': ['image', 'png'], 'image/gif': ['image', 'gif'], 'image/webp': ['image', 'webp'],
+    'video/mp4': ['video', 'mp4'], 'video/webm': ['video', 'webm'],
+    'audio/mpeg': ['audio', 'mp3'], 'audio/mp4': ['audio', 'm4a'], 'audio/wav': ['audio', 'wav'],
+    'audio/x-wav': ['audio', 'wav'], 'audio/ogg': ['audio', 'ogg'], 'audio/aac': ['audio', 'aac']
+  };
+  app.post('/api/media', creator, express.raw({ type: 'application/octet-stream', limit: '25mb' }), async (req, res) => {
+    const type = mediaTypes[req.get('X-Media-Type')];
+    assert(type && Buffer.isBuffer(req.body) && req.body.length > 0, 400, 'Choisissez une image, une vidéo ou un fichier audio pris en charge.');
+    const filename = `${randomUUID()}.${type[1]}`;
+    await mkdir(mediaDir, { recursive: true });
+    await writeFile(resolve(mediaDir, filename), req.body, { flag: 'wx' });
+    res.status(201).json({ url: `/media/${filename}`, type: type[0] });
+  });
   app.get('/api/quizzes', async (req, res) => {
     const quizzes = await db.query(`SELECT q.id,q.title,q.description,q.category,q.cover,q.visibility,q.published,q.owner_id,
       u.pseudo AS owner,(SELECT COUNT(*) FROM questions WHERE quiz_id=q.id) AS question_count
@@ -132,8 +153,8 @@ export function createApp(db, secret, options = {}) {
         [id, req.user.id, input.title, input.description, input.category, input.cover, input.visibility, randomBytes(5).toString('hex').toUpperCase(), Number(input.published), Date.now()]);
       for (const [position, q] of input.questions.entries()) {
         const qId = randomUUID();
-        await tx.query('INSERT INTO questions (id,quiz_id,text,explanation,duration,position) VALUES (?,?,?,?,?,?)',
-          [qId, id, q.text, q.explanation, q.duration, position]);
+        await tx.query('INSERT INTO questions (id,quiz_id,text,explanation,duration,position,media_url,media_type) VALUES (?,?,?,?,?,?,?,?)',
+          [qId, id, q.text, q.explanation, q.duration, position, q.mediaUrl, q.mediaType]);
         for (const a of q.answers) await tx.query('INSERT INTO answers (id,question_id,text,correct) VALUES (?,?,?,?)',
           [randomUUID(), qId, a.text, Number(a.correct)]);
       }
@@ -148,6 +169,20 @@ export function createApp(db, secret, options = {}) {
     assert(quiz, 404, 'Quiz introuvable.');
     await db.query('INSERT INTO reports (id,quiz_id,user_id,reason,created_at) VALUES (?,?,?,?,?)', [randomUUID(), quiz.id, req.user.id, reason, Date.now()]);
     res.status(201).json({ message: 'Signalement transmis à un administrateur.' });
+  });
+  app.post('/api/feedback', async (req, res) => {
+    const input = z.object({
+      email: emailSchema,
+      category: z.enum(['Réclamation', 'Fraude', 'Favoritisme', 'Insatisfaction', 'Autre']),
+      message: z.string().trim().min(10, 'Décrivez votre réclamation en au moins 10 caractères.').max(2000)
+    }).parse(req.body);
+    const id = randomUUID();
+    await db.transaction(async tx => {
+      await tx.query('INSERT INTO feedback (id,user_id,receipt_email,category,message,created_at) VALUES (?,?,?,?,?,?)',
+        [id, req.user.id, input.email, input.category, input.message, Date.now()]);
+      await auth.sendFeedbackReceipt(req.user, input.email, input.category, id);
+    });
+    res.status(201).json({ message: 'Votre réclamation a été transmise à l’administration.' });
   });
   app.get('/api/sessions', async (req, res) => {
     const rows = await db.query(`SELECT DISTINCT s.*,q.title,q.description,q.category,q.cover,q.owner_id,q.visibility,
@@ -166,23 +201,29 @@ export function createApp(db, secret, options = {}) {
   });
   app.get('/api/sessions/:id/report', async (req, res) => {
     const id = getId(req);
-    await game.requireApproval(id, req.user);
-    const [excluded] = await db.query('SELECT user_id FROM session_exclusions WHERE session_id=? AND user_id=?', [id, req.user.id]);
-    assert(!excluded, 403, 'Vous avez été exclu de cette session. Vos résultats sont conservés.');
+    const scope = req.query.scope || 'individual';
+    assert(['individual', 'collective'].includes(scope), 400, 'Type de relevé invalide.');
+    assert(scope !== 'collective' || req.user.role === 'admin', 403, 'Le relevé collectif est réservé aux administrateurs.');
+    if (scope === 'individual') await game.requireApproval(id, req.user);
     const [session] = await db.query(`SELECT s.id,s.mode,s.status,s.created_at,q.title,q.category,q.owner_id,
       (SELECT COUNT(*) FROM questions WHERE quiz_id=q.id) AS question_count
       FROM sessions s JOIN quizzes q ON q.id=s.quiz_id WHERE s.id=?`, [id]);
     assert(session, 404, 'Session introuvable.');
-    const isParticipant = (await db.query('SELECT id FROM participations WHERE session_id=? AND user_id=?', [id, req.user.id])).length > 0;
-    assert(canManageQuiz(req.user, session.owner_id) || isParticipant, 403, 'Vous ne pouvez pas consulter les résultats de cette session.');
+    if (scope === 'individual') {
+      const [excluded] = await db.query('SELECT user_id FROM session_exclusions WHERE session_id=? AND user_id=?', [id, req.user.id]);
+      assert(!excluded, 403, 'Vous avez été exclu de cette session. Vos résultats sont conservés.');
+      const [participation] = await db.query('SELECT id FROM participations WHERE session_id=? AND user_id=?', [id, req.user.id]);
+      assert(participation, 403, 'Vous ne pouvez consulter que vos propres résultats.');
+    }
     const players = await db.query(`SELECT u.id,u.pseudo,p.score,p.status,p.finished_at,
       CASE WHEN EXISTS (SELECT 1 FROM session_exclusions e WHERE e.session_id=p.session_id AND e.user_id=p.user_id) THEN 1 ELSE 0 END AS excluded,
       COUNT(pa.id) AS responses,COALESCE(SUM(CASE WHEN pa.points>0 THEN 1 ELSE 0 END),0) AS correct
       FROM participations p JOIN users u ON u.id=p.user_id
       LEFT JOIN participation_answers pa ON pa.participation_id=p.id
-      WHERE p.session_id=? GROUP BY p.id,p.session_id,p.user_id,u.id,u.pseudo,p.score,p.status,p.finished_at
-      ORDER BY p.score DESC,u.pseudo`, [id]);
-    res.json({ ...session, players: players.map(player => ({ ...player, excluded: Boolean(player.excluded), score: quizScore(player.score, session.question_count) })) });
+      WHERE p.session_id=?${scope === 'individual' ? ' AND p.user_id=?' : ''}
+      GROUP BY p.id,p.session_id,p.user_id,u.id,u.pseudo,p.score,p.status,p.finished_at
+      ORDER BY p.score DESC,u.pseudo`, scope === 'individual' ? [id, req.user.id] : [id]);
+    res.json({ ...session, scope, players: players.map(player => ({ ...player, excluded: Boolean(player.excluded), score: quizScore(player.score, session.question_count) })) });
   });
   app.post('/api/sessions', creator, async (req, res) => {
     const input = z.object({ quizId: z.string(), mode: z.enum(['live', 'async']), opensAt: z.number().int(), closesAt: z.number().int(),
@@ -267,14 +308,35 @@ export function createApp(db, secret, options = {}) {
   app.get('/api/admin', admin, async (req, res) => {
     const users = (await db.query('SELECT * FROM users ORDER BY created_at DESC')).map(u => ({ ...safeUser(u), disabled: Boolean(u.disabled) }));
     const reports = await db.query('SELECT r.*,q.title,u.pseudo FROM reports r JOIN quizzes q ON q.id=r.quiz_id JOIN users u ON u.id=r.user_id ORDER BY r.created_at DESC');
-    const sessions = await db.query(`SELECT s.id,s.mode,s.status,s.created_at,s.opens_at,s.closes_at,q.title,q.owner_id,u.pseudo AS owner,
+    const feedback = await db.query('SELECT f.id,f.category,f.message,f.receipt_email,f.status,f.created_at,u.pseudo,u.email FROM feedback f JOIN users u ON u.id=f.user_id ORDER BY f.created_at DESC');
+    const quizzes = await db.query(`SELECT q.id,q.title,q.published,q.created_at,u.pseudo AS owner,
+      (SELECT COUNT(*) FROM sessions WHERE quiz_id=q.id) AS session_count,
+      (SELECT COUNT(*) FROM participations p JOIN sessions s ON s.id=p.session_id WHERE s.quiz_id=q.id) AS player_count
+      FROM quizzes q JOIN users u ON u.id=q.owner_id ORDER BY q.created_at DESC`);
+    const sessions = await db.query(`SELECT s.id,s.quiz_id,s.mode,s.status,s.created_at,s.opens_at,s.closes_at,q.title,q.published,q.owner_id,u.pseudo AS owner,
       (SELECT COUNT(*) FROM participations WHERE session_id=s.id) AS player_count,
       (SELECT COUNT(*) FROM session_access WHERE session_id=s.id AND status='pending') AS pending_access_count,
       (SELECT status FROM participations WHERE session_id=s.id AND user_id=?) AS participation_status
       FROM sessions s JOIN quizzes q ON q.id=s.quiz_id JOIN users u ON u.id=q.owner_id ORDER BY s.created_at DESC`, [req.user.id]);
     const [totals] = await db.query(`SELECT (SELECT COUNT(*) FROM quizzes) AS quizzes,
       (SELECT COUNT(*) FROM sessions) AS sessions,(SELECT COUNT(*) FROM participations) AS participations`);
-    res.json({ users, reports, sessions, totals });
+    res.json({ users, reports, feedback, quizzes, sessions, totals });
+  });
+  app.put('/api/admin/feedback/:id', admin, async (req, res) => {
+    const { status } = z.object({ status: z.enum(['open', 'resolved']) }).parse(req.body);
+    const result = await db.query('SELECT id FROM feedback WHERE id=?', [req.params.id]);
+    assert(result.length, 404, 'Réclamation introuvable.');
+    await db.query('UPDATE feedback SET status=? WHERE id=?', [status, req.params.id]);
+    res.json({ message: status === 'resolved' ? 'Réclamation traitée.' : 'Réclamation réouverte.' });
+  });
+  app.post('/api/admin/quizzes/:id/archive', admin, async (req, res) => {
+    await db.transaction(async tx => {
+      const [quiz] = await tx.query(`SELECT id,published FROM quizzes WHERE id=?${tx.lock}`, [req.params.id]);
+      assert(quiz, 404, 'Quiz introuvable.');
+      assert(quiz.published, 409, 'Ce quiz a déjà été retiré du catalogue.');
+      await tx.query('UPDATE quizzes SET published=0 WHERE id=?', [quiz.id]);
+    });
+    res.json({ message: 'Quiz retiré du catalogue. Les sessions et résultats sont conservés.' });
   });
   app.put('/api/admin/users/:id', admin, async (req, res) => {
     const input = z.object({ role: z.enum(['player', 'creator', 'admin']), disabled: z.boolean() }).parse(req.body);

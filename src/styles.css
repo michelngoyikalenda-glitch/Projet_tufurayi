@@ -533,6 +533,9 @@ td select,
   gap: 10px;
   margin-top: 18px;
 }
+.contact-footer .footer-complaint-button { margin-top: 14px; color: #fff; background: #a9441e; box-shadow: 0 3px 8px #0005; }
+.contact-footer .footer-complaint-button:hover:not(:disabled) { background: #873716; }
+.feedback-message { white-space: pre-wrap; overflow-wrap: anywhere; }
 .contact-footer-link {
   display: flex;
   min-width: 0;
@@ -785,3 +788,9 @@ h1, h2, h3, h4, p, label, small, .alert, .board-name, .card-footer > span,
 .session-actions { display: grid; gap: 12px; }
 .exclusion-confirm { padding: 16px; margin: 16px 0; border: 1px solid #f6d9d5; border-radius: 9px; background: #fff1f0; }
 .exclusion-confirm .report-actions { margin-top: 12px; flex-wrap: wrap; }.share-buttons{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}.share-link{display:inline-flex;align-items:center;gap:5px;font-size:10px;font-weight:650;padding:6px 10px;border-radius:999px;border:1px solid #e4e6ec;background:#fff;color:#000;text-decoration:none}.share-link:hover{border-color:var(--orange)}.share-whatsapp{background:#e7f8ee;border-color:#c6ecd5}.share-telegram{background:#e6f3fc;border-color:#c6e3f6}.share-gmail{background:#fdecea;border-color:#f7d0cb}.game-share{display:flex;flex-direction:column;gap:6px;padding:16px;margin-bottom:18px}.game-share input{width:100%}.invite-notice{margin-top:0}
+.question-media { display: grid; gap: 8px; padding: 14px; border: 1px dashed #d8dce5; border-radius: 10px; }
+.question-media input[type=file] { width: 100%; padding: 9px; border: 1px solid #e3e5eb; border-radius: 8px; background: #fff; }
+.question-media-preview { display: block; width: min(100%, 560px); max-height: 320px; object-fit: contain; border-radius: 9px; background: #111827; }
+.question-media audio { width: min(100%, 560px); }
+.game-question-media { display: block; width: min(100%, 680px); max-height: 420px; margin: 20px auto; object-fit: contain; border-radius: 12px; background: #0b1220; }
+.game-question-media audio { width: min(100%, 560px); }

@@ -72,6 +72,20 @@ export async function api<T>(path: string, method = 'GET', body?: unknown, retry
   }
   return decode<T>(response);
 }
+export async function uploadMedia(file: File, retry = true): Promise<{ url: string; type: 'image' | 'video' | 'audio' }> {
+  const response = await fetch('/api/media', {
+    method: 'POST', credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/octet-stream', 'X-Media-Type': file.type,
+      ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}) },
+    body: file
+  });
+  if (response.status === 401 && retry) {
+    try { await restore(); }
+    catch (error) { setToken(null); window.dispatchEvent(new Event('auth:expired')); throw error; }
+    return uploadMedia(file, false);
+  }
+  return decode(response);
+}
 export const message = (error: unknown) => {
   if (error instanceof ApiError) return error.message;
   console.error(error);

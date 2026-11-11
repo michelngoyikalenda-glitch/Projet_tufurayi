@@ -121,7 +121,7 @@ test('Socket.IO réel : deux comptes, lancement synchronisé, réponse secrète,
     const reconnectExcluded = event(playerSocket, 'connect');
     playerSocket.connect(); await reconnectExcluded;
     await assert.rejects(emit(playerSocket, 'session:join', { id: sessionId }), /exclu/);
-    const retained = await fetch(`${base}/api/sessions/${sessionId}/report`, { headers: { Authorization: `Bearer ${auth.access(owner)}` } });
+    const retained = await fetch(`${base}/api/sessions/${sessionId}/report?scope=collective`, { headers: { Authorization: `Bearer ${auth.access(administrator)}` } });
     const retainedPlayer = (await retained.json()).players.find(entry => entry.id === player.id);
     assert.equal(retainedPlayer.excluded, true);
     assert.equal(retainedPlayer.score, end.score);

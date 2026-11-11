@@ -117,11 +117,16 @@ export function Game({ id, user, exit, complete, invitationCode }: { id: string;
         {state.mode === 'async' && isPlayer && <button className="button orange" disabled={busy} onClick={() => action('start')}>Commencez le quiz<ArrowRight size={17} /></button>}
       </div> : finished ? <div className="final-result"><div className="final-trophy"><Trophy size={56} /></div><span className="pill">DÉFI TERMINÉ</span><h2>{isPlayer ? 'Bien joué, ' + user.pseudo + ' !' : 'Merci pour cette belle partie !'}</h2><p>Une nouvelle étape dans votre aventure.</p>
         {isPlayer && <><div className="final-score">{number(state.score)}<span>points sur {number(1000)}</span></div><div className="result-summary"><span><Flag size={17} />{state.total} question{state.total > 1 ? 's' : ''}</span><span><Trophy size={17} />{state.players.findIndex(p => p.id === user.id) + 1}{state.players.findIndex(p => p.id === user.id) === 0 ? 'er' : 'e'} du classement</span></div></>}
-        <button className="button secondary" disabled={downloading} onClick={() => void download()}><Download size={17} />{downloading ? 'Préparation du PDF…' : 'Télécharger le relevé PDF'}</button>
+        {(user.role === 'admin' || isPlayer) && <button className="button secondary" disabled={downloading} onClick={() => void download()}><Download size={17} />
+          {downloading ? 'Préparation du PDF…' : user.role === 'admin' ? 'Télécharger le relevé collectif' : 'Télécharger mes notes'}</button>}
         <button className="button orange" onClick={exit}>Retour au tableau de bord<ArrowRight size={16} /></button></div> :
         q && <div className="question-screen"><div className="question-top"><span>QUESTION <strong>{state.index + 1}</strong> / {state.total}</span><span className={`timer ${seconds <= 5 ? 'urgent' : ''}`}><Clock3 size={18} />{review ? 'Terminé' : `${seconds} s`}</span></div>
           <div className="question-progress"><span style={{ width: `${review ? 100 : Math.min(100, (1 - seconds / q.duration) * 100)}%` }} /></div>
-          <h2>{q.text}</h2><p className="question-instruction">{review ? 'Voici ce qu’il fallait retenir.' : state.answered ? 'Votre réponse est enregistrée. Attendez la fin du temps.' : isPlayer ? 'Choisissez la bonne réponse. À vous de jouer !' : 'Les joueurs répondent…'}</p>
+          <h2>{q.text}</h2>
+          {q.mediaUrl && q.mediaType === 'image' && <img className="game-question-media" src={q.mediaUrl} alt="Illustration de la question" />}
+          {q.mediaUrl && q.mediaType === 'video' && <video className="game-question-media" src={q.mediaUrl} controls />}
+          {q.mediaUrl && q.mediaType === 'audio' && <audio className="game-question-media" src={q.mediaUrl} controls />}
+          <p className="question-instruction">{review ? 'Voici ce qu’il fallait retenir.' : state.answered ? 'Votre réponse est enregistrée. Attendez la fin du temps.' : isPlayer ? 'Choisissez la bonne réponse. À vous de jouer !' : 'Les joueurs répondent…'}</p>
           <div className="game-answers">{q.answers.map((a, i) => <button key={a.id} disabled={busy || state.answered || review || !isPlayer || seconds === 0}
             className={`${review && a.correct ? 'correct' : ''} ${review && a.id === q.selected && !a.correct ? 'incorrect' : ''}`}
             onClick={() => action('answer', { answerId: a.id, questionId: q.id })}><span className="answer-letter">{String.fromCharCode(65 + i)}</span><span>{a.text}</span>{review && a.correct && <CheckCircle2 size={21} />}</button>)}</div>

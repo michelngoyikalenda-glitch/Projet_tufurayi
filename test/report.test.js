@@ -10,7 +10,7 @@ test('relevé PDF : contenu français, pagination et téléchargement dans l’h
     const { createReportPdf } = await vite.ssrLoadModule('/src/report.ts');
     const report = {
       id: 'session-test', title: 'Défi de géographie', category: 'Géographie',
-      mode: 'live', status: 'ended', created_at: 1800000000000, question_count: 2,
+      mode: 'live', status: 'ended', created_at: 1800000000000, question_count: 2, scope: 'collective',
       players: [
         { id: '550e8400-e29b-41d4-a716-446655440000', pseudo: 'Élodie', score: 950, status: 'finished', finished_at: 1800000010000, responses: 2, correct: 2 },
         { id: '550e8400-e29b-41d4-a716-446655440001', pseudo: 'François', score: 0, status: 'finished', finished_at: 1800000020000, responses: 1, correct: 0 }
@@ -19,7 +19,7 @@ test('relevé PDF : contenu français, pagination et téléchargement dans l’h
     const doc = await createReportPdf(report);
     const pdf = doc.output();
     assert.match(pdf, /^%PDF-/);
-    for (const text of ['Relevé des résultats', 'Défi de géographie', 'Élodie', 'François', '950', '1000 points', 'ID du joueur', ...report.players.map(player => player.id), '2 / 2', '1 / 2', 'Page 1 / 1']) {
+    for (const text of ['Relevé de notes collectif', 'Défi de géographie', 'Élodie', 'François', '950', '1000 points', 'ID du joueur', ...report.players.map(player => player.id), '2 / 2', '1 / 2', 'Page 1 / 1']) {
       assert.ok(pdf.includes(text), `Texte absent du PDF : ${text}`);
     }
     assert.equal(doc.getNumberOfPages(), 1);
@@ -47,6 +47,14 @@ test('relevé PDF : contenu français, pagination et téléchargement dans l’h
     const excluded = await createReportPdf({ ...report, players: [{ ...report.players[0], excluded: true }] });
     assert.ok(excluded.output().includes('Exclu'));
     assert.ok(excluded.output().includes('950'));
+    const individual = await createReportPdf({ ...report, scope: 'individual', players: [report.players[0]] });
+    const individualPdf = individual.output();
+    assert.ok(individualPdf.includes('Relevé de notes individuel'));
+    assert.ok(individualPdf.includes('Élodie'));
+    assert.ok(individualPdf.includes('950'));
+    assert.ok(!individualPdf.includes('François'));
+    assert.ok(!individualPdf.includes(report.players[1].id));
+    assert.ok(!individualPdf.includes('Rang'));
 
     const { HistoryPage } = await vite.ssrLoadModule('/src/Account.tsx');
     const historyEntry = {
@@ -56,13 +64,13 @@ test('relevé PDF : contenu français, pagination et téléchargement dans l’h
     const renderHistory = status => renderToStaticMarkup(createElement(HistoryPage, {
       history: [{ ...historyEntry, status }], open() {}
     }));
-    assert.match(renderHistory('finished'), /Télécharger le PDF/);
-    assert.doesNotMatch(renderHistory('playing'), /Télécharger le PDF/);
+    assert.match(renderHistory('finished'), /Télécharger mes notes/);
+    assert.doesNotMatch(renderHistory('playing'), /Télécharger mes notes/);
     const excludedHistory = renderToStaticMarkup(createElement(HistoryPage, {
       history: [{ ...historyEntry, excluded: true }], open() {}
     }));
     assert.match(excludedHistory, /Exclu — résultats conservés/);
-    assert.doesNotMatch(excludedHistory, /Télécharger le PDF/);
+    assert.doesNotMatch(excludedHistory, /Télécharger mes notes/);
   } finally {
     await vite.close();
   }

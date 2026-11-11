@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Plus, Trash2, Check, Save, Radio, Clock3, ArrowRight, Copy } from 'lucide-react';
-import { api, message } from './api';
+import { api, message, uploadMedia } from './api';
 import { categories, Modal, QuizCover } from './components';
 import type { Quiz, QuestionInput, Statistics } from './types';
 import { validateQuiz, type QuizIssue } from './quizValidation';
@@ -18,6 +18,7 @@ export function Editor({ quizId, duplicate = false, close, saved }: { quizId?: s
   const [active, setActive] = useState(0);
   const [loading, setLoading] = useState(!!quizId);
   const [busy, setBusy] = useState(false);
+  const [uploadingMedia, setUploadingMedia] = useState(false);
   const [error, setError] = useState('');
   const [issues, setIssues] = useState<QuizIssue[]>([]);
   const form = useRef<HTMLFormElement>(null);
@@ -38,6 +39,17 @@ export function Editor({ quizId, duplicate = false, close, saved }: { quizId?: s
   }, [quizId, duplicate]);
   const question = questions[active];
   function update(patch: Partial<QuestionInput>) { setQuestions(current => current.map((q, i) => i === active ? { ...q, ...patch } : q)); }
+  async function addMedia(file?: File) {
+    if (!file) return;
+    if (file.size > 25 * 1024 * 1024) { setError('Le fichier ne doit pas dépasser 25 Mo.'); return; }
+    const questionIndex = active;
+    setError(''); setUploadingMedia(true);
+    try {
+      const media = await uploadMedia(file);
+      setQuestions(current => current.map((q, i) => i === questionIndex ? { ...q, mediaUrl: media.url, mediaType: media.type } : q));
+    } catch (e) { setError(message(e)); }
+    finally { setUploadingMedia(false); }
+  }
   async function submit(e: FormEvent) {
     e.preventDefault(); setError('');
     const invalid = validateQuiz(title, questions);
@@ -64,10 +76,19 @@ export function Editor({ quizId, duplicate = false, close, saved }: { quizId?: s
       <div className="form-grid"><label>Catégorie<select value={category} onChange={e => setCategory(e.target.value)}>{categories.map(c => <option key={c}>{c}</option>)}</select></label>
         <label>Visibilité<select value={visibility} onChange={e => setVisibility(e.target.value)}><option value="public">Public</option><option value="private">Invités uniquement</option><option value="invitation">Code ou invitation</option></select></label>
         <label>Couleur<select value={cover} onChange={e => setCover(e.target.value)}>{[['violet', 'Violet'], ['blue', 'Bleu'], ['green', 'Vert'], ['orange', 'Orange'], ['pink', 'Rose'], ['navy', 'Nuit']].map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></label></div>
-      <div className="editor-question-tabs">{questions.map((_q, i) => <button type="button" key={i} className={active === i ? 'active' : ''} onClick={() => setActive(i)}>Question {i + 1}{issues.some(issue => issue.question === i) ? ' (à compléter)' : ''}</button>)}
-        <button type="button" disabled={questions.length >= 50} onClick={() => { setQuestions([...questions, blankQuestion()]); setActive(questions.length); }}><Plus size={16} />Ajouter</button></div>
-      {question && <section className="question-editor"><div className="section-header"><h3>Question {active + 1}</h3><button type="button" className="icon-button danger" aria-label="Supprimer la question" disabled={questions.length === 1} onClick={() => { setQuestions(questions.filter((_q, i) => i !== active)); setActive(Math.max(0, active - 1)); }}><Trash2 size={17} /></button></div>
+      <div className="editor-question-tabs">{questions.map((_q, i) => <button type="button" key={i} disabled={uploadingMedia} className={active === i ? 'active' : ''} onClick={() => setActive(i)}>Question {i + 1}{issues.some(issue => issue.question === i) ? ' (à compléter)' : ''}</button>)}
+        <button type="button" disabled={questions.length >= 50 || uploadingMedia} onClick={() => { setQuestions([...questions, blankQuestion()]); setActive(questions.length); }}><Plus size={16} />Ajouter</button></div>
+      {question && <section className="question-editor"><div className="section-header"><h3>Question {active + 1}</h3><button type="button" className="icon-button danger" aria-label="Supprimer la question" disabled={questions.length === 1 || uploadingMedia} onClick={() => { setQuestions(questions.filter((_q, i) => i !== active)); setActive(Math.max(0, active - 1)); }}><Trash2 size={17} /></button></div>
         <label>Votre question<textarea aria-invalid={fieldInvalid('question-text', active)} required minLength={3} maxLength={1000} rows={2} value={question.text} onChange={e => update({ text: e.target.value })} placeholder="Quelle question allez-vous poser ?" /></label>
+        <div className="question-media">
+          <label>Ajouter une image, une vidéo ou un audio<input type="file" accept="image/jpeg,image/png,image/gif,image/webp,video/mp4,video/webm,audio/mpeg,audio/mp4,audio/wav,audio/x-wav,audio/ogg,audio/aac" disabled={uploadingMedia}
+            onChange={e => { void addMedia(e.currentTarget.files?.[0]); e.currentTarget.value = ''; }} /></label>
+          <small role="status">{uploadingMedia ? 'Importation du média…' : 'Formats image, vidéo ou audio • 25 Mo maximum'}</small>
+          {question.mediaUrl && question.mediaType === 'image' && <img className="question-media-preview" src={question.mediaUrl} alt="Aperçu du média de la question" />}
+          {question.mediaUrl && question.mediaType === 'video' && <video className="question-media-preview" src={question.mediaUrl} controls />}
+          {question.mediaUrl && question.mediaType === 'audio' && <audio className="question-media-preview" src={question.mediaUrl} controls />}
+          {question.mediaUrl && <button type="button" className="text-button" onClick={() => update({ mediaUrl: null, mediaType: null })}>Retirer le média</button>}
+        </div>
         <p className="small-note">Cliquez sur la coche pour sélectionner l’unique bonne réponse.</p>
         <div className="answer-editor">{question.answers.map((a, i) => <div key={i} className={a.correct ? 'is-correct' : ''}>
           <button type="button" onClick={() => update({ answers: question.answers.map((a, j) => ({ ...a, correct: i === j })) })} aria-label={`Définir la réponse ${i + 1} comme correcte`} aria-pressed={a.correct}><Check size={18} /></button>
@@ -83,7 +104,7 @@ export function Editor({ quizId, duplicate = false, close, saved }: { quizId?: s
       </section>}
       <label className="checkbox-label"><input type="checkbox" checked={published} onChange={e => setPublished(e.target.checked)} />Publier le quiz (sinon, enregistrer comme brouillon)</label>
       {error && <div className="alert error" role="alert">{error}</div>}
-      <div className="modal-actions"><span className="small-note">{questions.length} question{questions.length > 1 ? 's' : ''} • Une bonne réponse par question</span><button className="button orange" disabled={busy}><Save size={17} />{busy ? 'Enregistrement…' : 'Enregistrer le quiz'}</button></div>
+      <div className="modal-actions"><span className="small-note">{questions.length} question{questions.length > 1 ? 's' : ''} • Une bonne réponse par question</span><button className="button orange" disabled={busy || uploadingMedia}><Save size={17} />{busy ? 'Enregistrement…' : 'Enregistrer le quiz'}</button></div>
     </form>}
   </Modal>;
 }

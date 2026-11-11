@@ -100,7 +100,7 @@ test('salles : approbation administrateur obligatoire et suppression persistante
     assert.equal((await request(`${path}/access`, users.admin, 'POST', { email: users.player.email, approved: false })).status, 200);
     assert.equal((await request(path)).body.code, 'SESSION_UNAUTHORIZED');
     assert.equal((await request(`${path}/join`, users.player, 'POST', {})).body.code, 'SESSION_UNAUTHORIZED');
-    assert.equal((await request(`${path}/report`, users.admin)).body.players.length, 0);
+    assert.equal((await request(`${path}/report?scope=collective`, users.admin)).body.players.length, 0);
     assert.equal((await request(`${path}/access`, users.admin)).body.find(user => user.id === users.player.id).status, 'denied');
   });
   await t.test('au redémarrage les anciennes participations sans autorisation sont supprimées, pas les animateurs', async () => {

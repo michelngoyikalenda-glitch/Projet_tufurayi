@@ -12,6 +12,7 @@ import { createGame } from '../server/game.js';
 let db, service, server, base, folder, clock, owner, player, stranger;
 const mails = [];
 const userIds = [];
+let failEmailSend = false;
 const prefix = randomUUID();
 const secret = 'test-only-secret-'.repeat(4);
 async function request(path, { method = 'GET', body, token, cookie, origin } = {}) {
@@ -21,6 +22,12 @@ async function request(path, { method = 'GET', body, token, cookie, origin } = {
     ...(body ? { body: JSON.stringify(body) } : {})
   });
   return { status: response.status, body: await response.json(), cookie: response.headers.get('set-cookie')?.split(';')[0] };
+}
+async function requestMedia({ token, mime = 'image/png', data = Buffer.from([137, 80, 78, 71]) } = {}) {
+  const response = await fetch(`${base}/api/media`, { method: 'POST', headers: {
+    'Content-Type': 'application/octet-stream', 'X-Media-Type': mime, ...(token ? { Authorization: 'Bearer ' + token } : {})
+  }, body: data });
+  return { status: response.status, body: await response.json() };
 }
 async function register(name, role = 'player') {
   const email = `${prefix}-${name.toLowerCase()}@test.fr`;
@@ -40,9 +47,10 @@ const quizBody = visibility => ({
   questions: [1, 2].map(i => ({ text: `Question de test ${i} ?`, duration: 5, explanation: 'Une explication utile.',
     answers: [{ text: 'Oui', correct: true }, { text: 'Non', correct: false }] }))
 });
-async function fixture(mode = 'async', visibility = 'public', emails = [], questionCount = 2) {
+async function fixture(mode = 'async', visibility = 'public', emails = [], questionCount = 2, media = null) {
   const body = quizBody(visibility);
-  body.questions = Array.from({ length: questionCount }, (_, index) => ({ ...body.questions[0], text: `Question de test ${index + 1} ?` }));
+  body.questions = Array.from({ length: questionCount }, (_, index) => ({ ...body.questions[0],
+    text: `Question de test ${index + 1} ?`, mediaUrl: media?.url || null, mediaType: media?.type || null }));
   const quiz = await request('/quizzes', { method: 'POST', token: owner.token, body });
   assert.equal(quiz.status, 201);
   const detail = await request(`/quizzes/${quiz.body.id}`, { token: owner.token });
@@ -61,7 +69,8 @@ before(async () => {
   clock = Date.now();
   folder = await mkdtemp(join(tmpdir(), 'tufurayi-test-'));
   db = await openDatabase({ url: process.env.TEST_DATABASE_URL || '', filename: join(folder, 'test.sqlite') });
-  service = createApp(db, secret, { test: true, clock: () => clock, origin: 'http://localhost:5173', mailer: { async sendMail(mail) { mails.push(mail); } } });
+  service = createApp(db, secret, { test: true, clock: () => clock, origin: 'http://localhost:5173', mediaDir: join(folder, 'media'),
+    mailer: { async sendMail(mail) { if (failEmailSend) throw new Error('Échec SMTP simulé.'); mails.push(mail); } } });
   server = createServer(service.app);
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   base = `http://127.0.0.1:${server.address().port}`;
@@ -74,6 +83,7 @@ after(async () => {
   const placeholders = userIds.map(() => '?').join(',');
   if (userIds.length) await db.transaction(async tx => {
     await tx.query(`DELETE FROM reports WHERE user_id IN (${placeholders})`, userIds);
+    await tx.query(`DELETE FROM feedback WHERE user_id IN (${placeholders})`, userIds);
     await tx.query(`DELETE FROM session_access WHERE user_id IN (${placeholders}) OR decided_by IN (${placeholders})`, [...userIds, ...userIds]);
     await tx.query(`DELETE FROM session_exclusions WHERE user_id IN (${placeholders}) OR excluded_by IN (${placeholders})`, [...userIds, ...userIds]);
     await tx.query(`DELETE FROM participation_answers WHERE participation_id IN (SELECT id FROM participations WHERE user_id IN (${placeholders}))`, userIds);
@@ -88,6 +98,7 @@ after(async () => {
   });
   await db.close();
   for (const filename of ['test.sqlite', 'test.sqlite-wal', 'test.sqlite-shm']) await rm(join(folder, filename), { force: true });
+  await rm(join(folder, 'media'), { recursive: true, force: true });
   await rmdir(folder);
 });
 
@@ -155,6 +166,62 @@ test('éditeur : rôle, validation des réponses et immutabilité après planifi
   assert.equal(publicDetail.body.invitation_code, undefined);
 });
 
+test('réclamation : envoi joueur, consultation administrateur et traitement', async () => {
+  assert.equal((await request('/feedback', { method: 'POST', body: { category: 'Fraude', message: 'Je signale une fraude.' } })).status, 401);
+  assert.equal((await request('/feedback', { method: 'POST', token: player.token,
+    body: { email: 'joueur@test.fr', category: 'invalide', message: 'Description suffisamment longue.' } })).status, 400);
+  assert.equal((await request('/feedback', { method: 'POST', token: player.token,
+    body: { email: 'adresse-invalide', category: 'Réclamation', message: 'Description suffisamment longue.' } })).status, 400);
+  assert.equal((await request('/feedback', { method: 'POST', token: player.token,
+    body: { email: 'joueur@test.fr', category: 'Réclamation', message: '   court ' } })).status, 400);
+  failEmailSend = true;
+  const failedReceipt = await request('/feedback', { method: 'POST', token: player.token,
+    body: { email: 'accuse@test.fr', category: 'Réclamation', message: 'Mon accusé de réception doit être transmis.' } });
+  failEmailSend = false;
+  assert.equal(failedReceipt.status, 500);
+  assert.equal((await db.query('SELECT id FROM feedback WHERE user_id=?', [player.id])).length, 0);
+  const submitted = await request('/feedback', { method: 'POST', token: player.token,
+    body: { email: 'contact-joueur@test.fr', category: 'Favoritisme', message: 'Je souhaite signaler un favoritisme pendant une partie.' } });
+  assert.equal(submitted.status, 201);
+  const receipt = mails.at(-1);
+  assert.equal(receipt.to, 'contact-joueur@test.fr');
+  assert.match(receipt.subject, /Accusé de réception/);
+  assert.match(receipt.text, /Nous avons bien reçu votre demande/);
+  assert.match(receipt.text, /Favoritisme/);
+  assert.equal((await request('/admin', { token: player.token })).status, 403);
+  await db.query("UPDATE users SET role='admin' WHERE id=?", [owner.id]);
+  try {
+    const feedback = (await request('/admin', { token: owner.token })).body.feedback
+      .find(item => item.pseudo === player.pseudo && item.category === 'Favoritisme');
+    assert.ok(feedback);
+    assert.equal(feedback.message, 'Je souhaite signaler un favoritisme pendant une partie.');
+    assert.equal(feedback.receipt_email, 'contact-joueur@test.fr');
+    assert.equal((await request(`/admin/feedback/${feedback.id}`, { method: 'PUT', token: player.token,
+      body: { status: 'resolved' } })).status, 403);
+    assert.equal((await request(`/admin/feedback/${feedback.id}`, { method: 'PUT', token: owner.token,
+      body: { status: 'resolved' } })).status, 200);
+    assert.equal((await request('/admin', { token: owner.token })).body.feedback.find(item => item.id === feedback.id).status, 'resolved');
+  } finally {
+    await db.query("UPDATE users SET role='creator' WHERE id=?", [owner.id]);
+  }
+});
+
+test('médias : import réservé aux créateurs, conservation avec la question et lecture en jeu', async () => {
+  assert.equal((await requestMedia({ token: player.token })).status, 403);
+  assert.equal((await requestMedia({ token: owner.token, mime: 'application/pdf' })).status, 400);
+  const uploaded = await requestMedia({ token: owner.token });
+  assert.equal(uploaded.status, 201);
+  assert.equal(uploaded.body.type, 'image');
+  assert.equal((await fetch(`${base}${uploaded.body.url}`)).status, 200);
+  const { quiz, id } = await fixture('async', 'public', [], 1, uploaded.body);
+  assert.equal(quiz.questions[0].mediaUrl, uploaded.body.url);
+  assert.equal(quiz.questions[0].mediaType, 'image');
+  await request(`/sessions/${id}/join`, { method: 'POST', token: player.token, body: {} });
+  const begun = await request(`/sessions/${id}/start`, { method: 'POST', token: player.token, body: {} });
+  assert.equal(begun.body.question.mediaUrl, uploaded.body.url);
+  assert.equal(begun.body.question.mediaType, 'image');
+});
+
 test('différé : participation unique, réponses masquées, reprise, correction et historique', async () => {
   const { id } = await fixture();
   const first = await request(`/sessions/${id}/join`, { method: 'POST', token: player.token, body: {} });
@@ -191,13 +258,30 @@ test('différé : participation unique, réponses masquées, reprise, correction
   assert.equal(end.body.correction.length, 2);
   assert.equal((await request('/me/history', { token: player.token })).body.find(h => h.session_id === id).status, 'finished');
   assert.equal((await request('/leaderboard', { token: player.token })).body.find(p => p.id === player.id).score, 950);
+  await service.game.join(id, stranger);
   const report = await request(`/sessions/${id}/report`, { token: player.token });
   assert.equal(report.status, 200);
+  assert.equal(report.body.scope, 'individual');
+  assert.equal(report.body.players.length, 1);
+  assert.equal(report.body.players[0].id, player.id);
   assert.equal(report.body.question_count, 2);
-  assert.equal(report.body.players.find(p => p.id === player.id).score, 950);
-  assert.equal(report.body.players.find(p => p.pseudo === player.pseudo).correct, 2);
-  assert.equal((await request(`/sessions/${id}/report`, { token: stranger.token })).status, 403);
-  assert.equal((await request(`/sessions/${id}/report`, { token: owner.token })).status, 200);
+  assert.equal(report.body.players[0].score, 950);
+  assert.equal(report.body.players[0].correct, 2);
+  assert.equal((await request(`/sessions/${id}/report?scope=collective`, { token: player.token })).status, 403);
+  assert.equal((await request(`/sessions/${id}/report`, { token: owner.token })).status, 403);
+  const [previousRole] = await db.query('SELECT role FROM users WHERE id=?', [owner.id]);
+  await db.query("UPDATE users SET role='admin' WHERE id=?", [owner.id]);
+  try {
+    const collective = await request(`/sessions/${id}/report?scope=collective`, { token: owner.token });
+    assert.equal(collective.status, 200);
+    assert.equal(collective.body.scope, 'collective');
+    assert.equal(collective.body.players.length, 2);
+    assert.deepEqual(new Set(collective.body.players.map(p => p.id)), new Set([player.id, stranger.id]));
+    assert.equal((await request(`/sessions/${id}/report`, { token: owner.token })).status, 403);
+    assert.equal((await request(`/sessions/${id}/report?scope=unknown`, { token: owner.token })).status, 400);
+  } finally {
+    await db.query('UPDATE users SET role=? WHERE id=?', [previousRole.role, owner.id]);
+  }
 });
 
 test('différé : temps écoulé pendant une déconnexion, aucune réponse tardive récompensée', async () => {
@@ -402,9 +486,15 @@ test('exclusion : résultats conservés en cours de jeu et après la fin, en dir
       assert.equal(after.status, 'finished');
       if (completed) assert.equal(after.finished_at, before.finished_at);
       assert.deepEqual(await db.query('SELECT * FROM participation_answers WHERE participation_id=? ORDER BY id', [before.id]), answers);
-      const report = await request(`/sessions/${id}/report`, { token: owner.token });
-      assert.equal(report.body.players.find(entry => entry.id === player.id).excluded, true);
-      assert.equal(report.body.players.find(entry => entry.id === player.id).score, Math.round(before.score / 2));
+      const [previousRole] = await db.query('SELECT role FROM users WHERE id=?', [owner.id]);
+      await db.query("UPDATE users SET role='admin' WHERE id=?", [owner.id]);
+      try {
+        const report = await request(`/sessions/${id}/report?scope=collective`, { token: owner.token });
+        assert.equal(report.body.players.find(entry => entry.id === player.id).excluded, true);
+        assert.equal(report.body.players.find(entry => entry.id === player.id).score, Math.round(before.score / 2));
+      } finally {
+        await db.query('UPDATE users SET role=? WHERE id=?', [previousRole.role, owner.id]);
+      }
       const board = (await service.game.snapshot(id, owner)).players.find(entry => entry.id === player.id);
       assert.equal(board.excluded, true);
       assert.equal(board.score, Math.round(before.score / 2));
@@ -462,6 +552,40 @@ test('statistiques et modération : accès créateur et administrateur', async (
   assert.equal((await request(`/admin/users/${stranger.id}`, { method: 'PUT', token: owner.token, body: { role: 'player', disabled: true } })).status, 200);
   assert.equal((await request('/me', { token: stranger.token })).status, 401);
   await db.query('UPDATE users SET role=? WHERE id=?', [administrator.role, owner.id]);
+});
+
+test('administrateur : retrait du catalogue sans suppression des sessions ni des résultats', async () => {
+  const { quiz, id } = await fixture('async', 'public', [], 1);
+  await service.game.join(id, player);
+  const begun = await request(`/sessions/${id}/start`, { method: 'POST', token: player.token, body: {} });
+  await service.game.answer(id, player, await correctAnswer(begun.body.question.id), begun.body.question.id);
+  await db.query("UPDATE sessions SET status='ended' WHERE id=?", [id]);
+  await db.query("UPDATE users SET role='admin' WHERE id=?", [owner.id]);
+  try {
+    const adminData = await request('/admin', { token: owner.token });
+    const listed = adminData.body.quizzes.find(item => item.id === quiz.id);
+    const listedSession = adminData.body.sessions.find(item => item.id === id);
+    assert.ok(listed);
+    assert.ok(listedSession);
+    assert.equal(listedSession.quiz_id, quiz.id);
+    assert.equal(Number(listedSession.published), 1);
+    assert.equal(Number(listed.session_count), 1);
+    assert.equal(Number(listed.player_count), 1);
+    assert.equal((await request(`/admin/quizzes/${quiz.id}/archive`, { method: 'POST', token: player.token })).status, 403);
+    assert.equal((await request('/admin/quizzes/not-a-quiz/archive', { method: 'POST', token: owner.token })).status, 404);
+    assert.equal((await request(`/admin/quizzes/${quiz.id}/archive`, { method: 'POST', token: owner.token })).status, 200);
+    assert.equal((await request(`/admin/quizzes/${quiz.id}/archive`, { method: 'POST', token: owner.token })).status, 409);
+
+    const [storedQuiz] = await db.query('SELECT published FROM quizzes WHERE id=?', [quiz.id]);
+    assert.equal(storedQuiz.published, 0);
+    assert.equal((await db.query('SELECT id FROM sessions WHERE id=?', [id])).length, 1);
+    assert.equal((await db.query('SELECT id FROM participations WHERE session_id=? AND user_id=?', [id, player.id])).length, 1);
+    assert.equal((await db.query('SELECT id FROM participation_answers WHERE participation_id IN (SELECT id FROM participations WHERE session_id=?)', [id])).length, 1);
+    assert.equal((await request(`/quizzes/${quiz.id}`, { token: player.token })).status, 403);
+    assert.equal((await request(`/sessions/${id}`, { token: player.token })).status, 200);
+  } finally {
+    await db.query("UPDATE users SET role='creator' WHERE id=?", [owner.id]);
+  }
 });
 
 test('rôles : un ancien créateur devenu joueur perd toutes les fonctions de gestion', async () => {

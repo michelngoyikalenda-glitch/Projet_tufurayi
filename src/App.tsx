@@ -219,7 +219,7 @@ export default function App() {
               <button className="text-button" onClick={() => setPopup({ type: 'players', id: s.id, title: s.title })}><Users size={15} />Gérer les joueurs</button></div></td></tr>)}</tbody></table></div></section>
         </> : page === 'history' ? <HistoryPage history={history} open={id => setGameId(id)} /> : page === 'leaderboard' ? <LeaderboardPage user={user} /> :
         page === 'profile' ? <ProfilePage user={user} history={history} update={setUser} /> : page === 'admin' && user.role === 'admin' ? <AdminPage /> : null}
-        <Footer />
+        <Footer user={user} onLogin={() => setAuthMode('login')} />
       </main></div>
     {authMode && <Auth initial={authMode} token={authToken} invite={invite} close={closeAuth} onLogin={u => { setUser(u); closeAuth(); setError(''); }} />}
     {creator && popup?.type === 'editor' && <Editor quizId={popup.id} duplicate={popup.duplicate} close={closePopup} saved={load} />}

@@ -61,6 +61,16 @@ export function createAuth(db, secret, { mailer, origin = process.env.APP_URL ||
       console.info(`[Email local → ${user.email}] ${link}`);
     }
   }
+  async function sendFeedbackReceipt(user, recipient, category, requestId) {
+    const subject = 'Accusé de réception de votre réclamation — Tufurayi';
+    const text = `Bonjour ${user.pseudo},\n\nNous avons bien reçu votre demande de type « ${category} ». Elle a été transmise à l’administration de Tufurayi pour examen.\n\nRéférence : ${requestId}\n\nMerci de nous avoir écrit.\nL’équipe Tufurayi`;
+    if (smtp) {
+      await smtp.sendMail({ from: process.env.MAIL_FROM || 'Tufurayi <noreply@example.com>', to: recipient, subject, text });
+      return;
+    }
+    assert(process.env.NODE_ENV !== 'production', 503, 'Le service email n’est pas configuré.');
+    console.info(`[Email local → ${recipient}] ${subject}\n${text}`);
+  }
   const access = user => jwt.sign({ sub: user.id, ver: user.token_version || 0 }, secret, { expiresIn: '15m', issuer: 'tufurayi', audience: 'tufurayi' });
   async function issue(res, user) {
     const refresh = randomBytes(48).toString('hex');
@@ -151,7 +161,7 @@ export function createAuth(db, secret, { mailer, origin = process.env.APP_URL ||
     secure: process.env.NODE_ENV === 'production' || new URL(origin).protocol === 'https:' || provider === 'apple',
     sameSite: provider === 'apple' ? 'none' : 'lax', path: `/api/auth/oauth/${provider}/callback` });
   return {
-    authenticate, middleware, access, sendLink,
+    authenticate, middleware, access, sendLink, sendFeedbackReceipt,
     async register(req, res) {
       const input = z.object({ email: emailSchema, password: passwordSchema,
         pseudo: z.string().trim().min(2).max(30), role: registrationRole,

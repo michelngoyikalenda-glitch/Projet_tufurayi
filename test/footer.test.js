@@ -17,6 +17,7 @@ test('le pied de page affiche les liens WhatsApp et Gmail', async () => {
     assert.match(html, /<img[^>]*src="[^"]*contact-gmail\.jpg"[^>]*alt=""/);
     assert.match(html, /WhatsApp/);
     assert.match(html, /Gmail/);
+    assert.match(html, /Faire une réclamation ou un signalement/);
     assert.match(html, /role="contentinfo"/);
     assert.ok(html.indexOf(`© ${new Date().getFullYear()} Tufurayi. Tous droits réservés.`) > html.indexOf('Fait pour apprendre.'));
   } finally {

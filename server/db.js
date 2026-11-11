@@ -23,7 +23,8 @@ CREATE TABLE IF NOT EXISTS quizzes (
 );
 CREATE TABLE IF NOT EXISTS questions (
   id TEXT PRIMARY KEY, quiz_id TEXT NOT NULL REFERENCES quizzes(id) ON DELETE CASCADE,
-  text TEXT NOT NULL, explanation TEXT NOT NULL, duration INTEGER NOT NULL, position INTEGER NOT NULL
+  text TEXT NOT NULL, explanation TEXT NOT NULL, duration INTEGER NOT NULL, position INTEGER NOT NULL,
+  media_url TEXT, media_type TEXT
 );
 CREATE TABLE IF NOT EXISTS answers (
   id TEXT PRIMARY KEY, question_id TEXT NOT NULL REFERENCES questions(id) ON DELETE CASCADE,
@@ -65,6 +66,10 @@ CREATE TABLE IF NOT EXISTS reports (
   id TEXT PRIMARY KEY, quiz_id TEXT NOT NULL REFERENCES quizzes(id), user_id TEXT NOT NULL REFERENCES users(id),
   reason TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'open', created_at BIGINT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS feedback (
+  id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), receipt_email TEXT NOT NULL, category TEXT NOT NULL,
+  message TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'open', created_at BIGINT NOT NULL
+);
 CREATE INDEX IF NOT EXISTS participation_user ON participations(user_id);
 CREATE INDEX IF NOT EXISTS tokens_expiry ON auth_tokens(expires_at);
 CREATE INDEX IF NOT EXISTS oauth_expiry ON oauth_requests(expires_at);
@@ -75,11 +80,26 @@ export async function openDatabase({ url = process.env.DATABASE_URL, filename = 
   if (url) {
     pool = new pg.Pool({ connectionString: url });
     await pool.query(schema);
+    const columns = await pool.query("SELECT column_name FROM information_schema.columns WHERE table_name='questions'");
+    const existing = new Set(columns.rows.map(row => row.column_name));
+    for (const column of ['media_url', 'media_type']) {
+      if (!existing.has(column)) await pool.query(`ALTER TABLE questions ADD COLUMN ${column} TEXT`);
+    }
+    const feedbackColumns = await pool.query("SELECT column_name FROM information_schema.columns WHERE table_name='feedback'");
+    if (!feedbackColumns.rows.some(row => row.column_name === 'receipt_email'))
+      await pool.query("ALTER TABLE feedback ADD COLUMN receipt_email TEXT NOT NULL DEFAULT ''");
   } else {
     if (filename !== ':memory:') await mkdir(dirname(filename), { recursive: true });
     sqlite = new DatabaseSync(filename);
     sqlite.exec('PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;');
     sqlite.exec(schema);
+    const columns = new Set(sqlite.prepare('PRAGMA table_info(questions)').all().map(row => row.name));
+    for (const column of ['media_url', 'media_type']) {
+      if (!columns.has(column)) sqlite.exec(`ALTER TABLE questions ADD COLUMN ${column} TEXT`);
+    }
+    const feedbackColumns = new Set(sqlite.prepare('PRAGMA table_info(feedback)').all().map(row => row.name));
+    if (!feedbackColumns.has('receipt_email'))
+      sqlite.exec("ALTER TABLE feedback ADD COLUMN receipt_email TEXT NOT NULL DEFAULT ''");
   }
   const makeQuery = (client) => async (sql, values = []) => {
     if (pool) {

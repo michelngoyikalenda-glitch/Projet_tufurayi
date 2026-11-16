@@ -1,20 +1,28 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Plus, Trash2, Check, Save, Radio, Clock3, ArrowRight, Copy } from 'lucide-react';
-import { api, message, uploadMedia } from './api';
+import { api, date, message, uploadMedia } from './api';
 import { categories, Modal, QuizCover } from './components';
-import type { Quiz, QuestionInput, Statistics } from './types';
+import type { Quiz, QuizDraft, QuestionInput, Statistics } from './types';
 import { validateQuiz, type QuizIssue } from './quizValidation';
 
 const blankQuestion = (): QuestionInput => ({ text: '', explanation: '', duration: 20,
   answers: [{ text: '', correct: true }, { text: '', correct: false }, { text: '', correct: false }, { text: '', correct: false }] });
+const parseVisibility = (value: string): Quiz['visibility'] =>
+  value === 'private' || value === 'invitation' ? value : 'public';
 export function Editor({ quizId, duplicate = false, close, saved }: { quizId?: string; duplicate?: boolean; close: () => void; saved: () => void }) {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [category, setCategory] = useState(categories[0]);
   const [cover, setCover] = useState('violet');
-  const [visibility, setVisibility] = useState('public');
+  const [visibility, setVisibility] = useState<Quiz['visibility']>('public');
   const [published, setPublished] = useState(true);
   const [questions, setQuestions] = useState<QuestionInput[]>([blankQuestion()]);
+  const [drafts, setDrafts] = useState<QuizDraft[]>([]);
+  const [draftId, setDraftId] = useState<string | null>(null);
+  const [draftStatus, setDraftStatus] = useState('');
+  const [draftReady, setDraftReady] = useState(false);
+  const [hasEdited, setHasEdited] = useState(false);
+  const [sourceQuizId, setSourceQuizId] = useState<string | null>(quizId && !duplicate ? quizId : null);
   const [active, setActive] = useState(0);
   const [loading, setLoading] = useState(!!quizId);
   const [busy, setBusy] = useState(false);
@@ -22,21 +30,63 @@ export function Editor({ quizId, duplicate = false, close, saved }: { quizId?: s
   const [error, setError] = useState('');
   const [issues, setIssues] = useState<QuizIssue[]>([]);
   const form = useRef<HTMLFormElement>(null);
+  const draftIdRef = useRef<string | null>(null);
+  const draftQueue = useRef<Promise<void>>(Promise.resolve());
+  const draftTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     if (!issues.length) return;
     form.current?.querySelector<HTMLElement>('[aria-invalid="true"]')?.focus();
   }, [issues]);
+  function restoreDraft(draft: QuizDraft) {
+    const value = draft.payload;
+    setTitle(value.title); setDescription(value.description); setCategory(value.category); setCover(value.cover);
+    setVisibility(value.visibility); setPublished(value.published);
+    setQuestions(value.questions.map(q => ({ ...q, answers: q.answers.map(a => ({ ...a })) })));
+    setSourceQuizId(value.quizId || null); setDraftId(draft.id); draftIdRef.current = draft.id;
+    setHasEdited(false); setDraftStatus('Brouillon repris');
+  }
   useEffect(() => {
-    if (!quizId) return;
     let cancelled = false;
-    api<Quiz>(`/quizzes/${quizId}`).then(q => {
-      if (cancelled) return;
-      setTitle(q.title + (duplicate ? ' (copie)' : '')); setDescription(q.description); setCategory(q.category); setCover(q.cover);
-      setVisibility(q.visibility); setPublished(Boolean(q.published));
-      setQuestions((q.questions || []).map(q => ({ ...q, answers: q.answers.map(a => ({ ...a, correct: Boolean(a.correct) })) })));
-    }).catch(e => { if (!cancelled) setError(message(e)); }).finally(() => { if (!cancelled) setLoading(false); });
+    async function initialize() {
+      try {
+        const savedDrafts = await api<QuizDraft[]>('/drafts');
+        if (cancelled) return;
+        setDrafts(savedDrafts);
+        const matchingDraft = quizId && !duplicate ? savedDrafts.find(draft => draft.payload.quizId === quizId) : undefined;
+        if (matchingDraft) {
+          restoreDraft(matchingDraft);
+          return;
+        }
+        if (quizId) {
+          const q = await api<Quiz>(`/quizzes/${quizId}`);
+          if (cancelled) return;
+          setTitle(q.title + (duplicate ? ' (copie)' : '')); setDescription(q.description); setCategory(q.category); setCover(q.cover);
+          setVisibility(q.visibility); setPublished(Boolean(q.published)); setSourceQuizId(duplicate ? null : q.id);
+          setQuestions((q.questions || []).map(q => ({ ...q, answers: q.answers.map(a => ({ ...a, correct: Boolean(a.correct) })) })));
+        }
+      } catch (e) { if (!cancelled) setError(message(e)); }
+      finally { if (!cancelled) { setLoading(false); setDraftReady(true); } }
+    }
+    void initialize();
     return () => { cancelled = true; };
   }, [quizId, duplicate]);
+  useEffect(() => {
+    if (!draftReady || !hasEdited) return;
+    draftTimer.current = setTimeout(() => {
+      const payload = { quizId: sourceQuizId, title, description, category, cover, visibility, published, questions };
+      setDraftStatus('Sauvegarde en cours…');
+      draftQueue.current = draftQueue.current.then(async () => {
+        const currentId = draftIdRef.current;
+        const result = await api<{ id: string; updatedAt: number }>(currentId ? `/drafts/${currentId}` : '/drafts',
+          currentId ? 'PUT' : 'POST', payload);
+        if (!currentId) { draftIdRef.current = result.id; setDraftId(result.id); }
+        setDrafts(current => [{ id: result.id, title: payload.title, updated_at: result.updatedAt, payload },
+          ...current.filter(draft => draft.id !== result.id)]);
+        setDraftStatus('Brouillon enregistré automatiquement'); setError('');
+      }).catch(e => { setDraftStatus(''); setError(message(e)); });
+    }, 800);
+    return () => { if (draftTimer.current) clearTimeout(draftTimer.current); draftTimer.current = null; };
+  }, [draftReady, hasEdited, sourceQuizId, title, description, category, cover, visibility, published, questions]);
   const question = questions[active];
   function update(patch: Partial<QuestionInput>) { setQuestions(current => current.map((q, i) => i === active ? { ...q, ...patch } : q)); }
   async function addMedia(file?: File) {
@@ -60,21 +110,39 @@ export function Editor({ quizId, duplicate = false, close, saved }: { quizId?: s
     }
     setBusy(true);
     try {
-      await api(quizId && !duplicate ? `/quizzes/${quizId}` : '/quizzes', quizId && !duplicate ? 'PUT' : 'POST',
-        { title, description, category, cover, visibility, published, questions });
+      if (draftTimer.current) { clearTimeout(draftTimer.current); draftTimer.current = null; }
+      await draftQueue.current;
+      let savedDraftId = draftIdRef.current;
+      if (hasEdited) {
+        const payload = { quizId: sourceQuizId, title, description, category, cover, visibility, published, questions };
+        const result = await api<{ id: string; updatedAt: number }>(savedDraftId ? `/drafts/${savedDraftId}` : '/drafts',
+          savedDraftId ? 'PUT' : 'POST', payload);
+        savedDraftId = result.id;
+        draftIdRef.current = result.id;
+      }
+      await api(sourceQuizId ? `/quizzes/${sourceQuizId}` : '/quizzes', sourceQuizId ? 'PUT' : 'POST',
+        { title, description, category, cover, visibility, published, questions, ...(savedDraftId ? { draftId: savedDraftId } : {}) });
       saved(); close();
     } catch (e) { setError(message(e)); }
     finally { setBusy(false); }
   }
   const fieldInvalid = (field: string, index?: number) => issues.some(issue => issue.field === field && issue.question === index);
+  const resumableDrafts = drafts.filter(draft => quizId && !duplicate
+    ? draft.payload.quizId === quizId : !draft.payload.quizId);
   return <Modal title={duplicate ? 'Dupliquer un quiz' : quizId ? 'Modifier le quiz' : 'Créer un quiz'} close={close} wide>
-    {loading ? <div className="loading">Chargement du quiz…</div> : <form ref={form} noValidate onSubmit={submit} className="form editor-form">
+    {loading ? <div className="loading">Chargement du quiz…</div> : <form ref={form} noValidate onSubmit={submit} onChange={() => setHasEdited(true)} onClickCapture={() => setHasEdited(true)} className="form editor-form">
+      {!draftId && !hasEdited && resumableDrafts.length > 0 && <section className="panel editor-drafts"><h3>Reprendre un brouillon</h3>
+        <p>Vos modifications sont sauvegardées automatiquement et restent accessibles sur votre compte.</p>
+        {resumableDrafts.map(draft => <button type="button" className="text-button" key={draft.id} onClick={() => restoreDraft(draft)}>
+          <Clock3 size={15} />{draft.title || 'Quiz sans titre'} · {date(draft.updated_at)}
+        </button>)}
+      </section>}
       {issues.length > 0 && <div className="alert error" role="alert"><div><strong>Le quiz n’a pas été enregistré. Complétez les champs suivants :</strong><ul>{issues.map((issue, index) => <li key={index}>{issue.message}</li>)}</ul></div></div>}
       <div className="editor-top"><div><label>Titre du quiz<input aria-invalid={fieldInvalid('quiz-title')} required minLength={3} maxLength={100} value={title} onChange={e => setTitle(e.target.value)} placeholder="Un titre qui donne envie de jouer" /></label>
         <label>Description<textarea maxLength={1000} value={description} onChange={e => setDescription(e.target.value)} placeholder="Présentez votre défi en quelques mots…" rows={2} /></label></div>
         <QuizCover quiz={{ category, cover }} small /></div>
       <div className="form-grid"><label>Catégorie<select value={category} onChange={e => setCategory(e.target.value)}>{categories.map(c => <option key={c}>{c}</option>)}</select></label>
-        <label>Visibilité<select value={visibility} onChange={e => setVisibility(e.target.value)}><option value="public">Public</option><option value="private">Invités uniquement</option><option value="invitation">Code ou invitation</option></select></label>
+        <label>Visibilité<select value={visibility} onChange={e => setVisibility(parseVisibility(e.target.value))}><option value="public">Public</option><option value="private">Invités uniquement</option><option value="invitation">Code ou invitation</option></select></label>
         <label>Couleur<select value={cover} onChange={e => setCover(e.target.value)}>{[['violet', 'Violet'], ['blue', 'Bleu'], ['green', 'Vert'], ['orange', 'Orange'], ['pink', 'Rose'], ['navy', 'Nuit']].map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></label></div>
       <div className="editor-question-tabs">{questions.map((_q, i) => <button type="button" key={i} disabled={uploadingMedia} className={active === i ? 'active' : ''} onClick={() => setActive(i)}>Question {i + 1}{issues.some(issue => issue.question === i) ? ' (à compléter)' : ''}</button>)}
         <button type="button" disabled={questions.length >= 50 || uploadingMedia} onClick={() => { setQuestions([...questions, blankQuestion()]); setActive(questions.length); }}><Plus size={16} />Ajouter</button></div>
@@ -104,7 +172,7 @@ export function Editor({ quizId, duplicate = false, close, saved }: { quizId?: s
       </section>}
       <label className="checkbox-label"><input type="checkbox" checked={published} onChange={e => setPublished(e.target.checked)} />Publier le quiz (sinon, enregistrer comme brouillon)</label>
       {error && <div className="alert error" role="alert">{error}</div>}
-      <div className="modal-actions"><span className="small-note">{questions.length} question{questions.length > 1 ? 's' : ''} • Une bonne réponse par question</span><button className="button orange" disabled={busy || uploadingMedia}><Save size={17} />{busy ? 'Enregistrement…' : 'Enregistrer le quiz'}</button></div>
+      <div className="modal-actions"><span className="small-note" role="status">{draftStatus || `${questions.length} question${questions.length > 1 ? 's' : ''} • Une bonne réponse par question`}</span><button className="button orange" disabled={busy || uploadingMedia}><Save size={17} />{busy ? 'Enregistrement…' : 'Enregistrer le quiz'}</button></div>
     </form>}
   </Modal>;
 }
@@ -118,14 +186,30 @@ export function Schedule({ quiz, close, saved }: { quiz: Quiz; close: () => void
   const [closes, setCloses] = useState(localDate(Date.now() + 86400000));
   const [emails, setEmails] = useState('');
   const [busy, setBusy] = useState(false);
+  const [resending, setResending] = useState(false);
+  const [createdId, setCreatedId] = useState('');
+  const [notifications, setNotifications] = useState({ sent: 0, failed: 0 });
   const [error, setError] = useState('');
   async function submit(e: FormEvent) {
     e.preventDefault(); setBusy(true); setError('');
     try {
-      const { id } = await api<{ id: string }>('/sessions', 'POST', { quizId: quiz.id, mode,
+      const { id, notifications: result } = await api<{ id: string; notifications: { sent: number; failed: number } }>('/sessions', 'POST', { quizId: quiz.id, mode,
         opensAt: new Date(opens).getTime(), closesAt: new Date(closes).getTime(), emails: emails.split(/[\s,;]+/).filter(Boolean) });
-      saved(id); close();
+      setCreatedId(id); setNotifications(result); saved(id);
+      if (!result.failed) close();
+      else setError(`La session est créée, mais ${result.failed} invitation(s) n’ont pas pu être envoyées.`);
     } catch (e) { setError(message(e)); } finally { setBusy(false); }
+  }
+  async function resend() {
+    if (!createdId) return;
+    setResending(true); setError('');
+    try {
+      const result = await api<{ sent: number; failed: number }>(`/sessions/${createdId}/invitations/resend`, 'POST', {});
+      setNotifications(current => ({ sent: current.sent + result.sent, failed: result.failed }));
+      if (!result.failed) close();
+      else setError(`${result.failed} invitation(s) restent à envoyer. Vérifiez la configuration du service email.`);
+    } catch (e) { setError(message(e)); }
+    finally { setResending(false); }
   }
   return <Modal title="Planifier une session" close={close}><p className="modal-subtitle">{quiz.title}</p>
     <form className="form" onSubmit={submit}><div className="mode-picker">{[
@@ -134,10 +218,14 @@ export function Schedule({ quiz, close, saved }: { quiz: Quiz; close: () => void
     ].map(item => <button type="button" key={item.value} className={mode === item.value ? 'active' : ''} onClick={() => setMode(item.value)}><item.icon size={23} /><strong>{item.label}</strong><small>{item.text}</small></button>)}</div>
       <label>Ouverture<input type="datetime-local" required value={opens} onChange={e => setOpens(e.target.value)} /></label>
       <label>Fermeture<input type="datetime-local" required value={closes} onChange={e => setCloses(e.target.value)} /></label>
-      <label>Inviter des joueurs (adresses électroniques)<textarea rows={3} value={emails} onChange={e => setEmails(e.target.value)} placeholder="alex@exemple.fr, lea@exemple.fr" /><small>Les invitations apparaîtront dans leur tableau de bord. Elles ne remplacent pas l’autorisation explicite d’un administrateur pour cette salle.</small></label>
+      <label>Inviter des joueurs (adresses électroniques)<textarea rows={3} value={emails} onChange={e => setEmails(e.target.value)} placeholder="alex@exemple.fr, lea@exemple.fr" /><small>Un email d’invitation leur sera envoyé et la session apparaîtra dans leur tableau de bord. L’autorisation explicite d’un administrateur reste obligatoire.</small></label>
       {quiz.visibility === 'invitation' && <div className="alert info"><Copy size={17} />Code du quiz : <strong>{quiz.invitation_code}</strong></div>}
+      {createdId && <div className="alert success" role="status">{notifications.sent} invitation(s) envoyée(s).</div>}
       {error && <div className="alert error" role="alert">{error}</div>}
-      <button className="button orange full" disabled={busy}>{busy ? 'Planification…' : 'Créer la session'}<ArrowRight size={17} /></button>
+      {createdId ? notifications.failed > 0 ? <button type="button" className="button orange full" disabled={resending} onClick={() => void resend()}>
+        {resending ? 'Nouvel essai…' : 'Renvoyer les invitations en échec'}<ArrowRight size={17} />
+      </button> : <button type="button" className="button secondary full" onClick={close}>Fermer</button> :
+        <button className="button orange full" disabled={busy}>{busy ? 'Planification…' : 'Créer la session'}<ArrowRight size={17} /></button>}
     </form>
   </Modal>;
 }

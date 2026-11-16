@@ -10,6 +10,19 @@ test('éditeur : toutes les questions sont validées, même les onglets masqués
       text: 'Quelle est la bonne réponse ?', explanation: '', duration: 20,
       answers: [{ text: 'Oui', correct: true }, { text: 'Non', correct: false }]
     });
+
+    test('catégories : les nouveaux domaines sont disponibles dans l’interface', async () => {
+      const vite = await createServer({ server: { middlewareMode: true }, appType: 'custom', logLevel: 'silent' });
+      try {
+        const { categories } = await vite.ssrLoadModule('/src/components.tsx');
+        for (const category of ['Langues', 'Arts et littérature', 'Économie', 'Environnement', 'Santé',
+          'Mathématiques', 'Philosophie', 'Éducation civique', 'Agriculture', 'Musique', 'Entrepreneuriat']) {
+          assert.ok(categories.includes(category), `${category} doit être proposée`);
+        }
+      } finally {
+        await vite.close();
+      }
+    });
     const questions = Array.from({ length: 5 }, valid);
     questions[1].text = '  ';
     questions[1].answers[0].text = '';

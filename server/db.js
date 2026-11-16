@@ -60,7 +60,7 @@ CREATE TABLE IF NOT EXISTS session_access (
 );
 CREATE TABLE IF NOT EXISTS invitations (
   id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id), email TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'pending', UNIQUE(session_id, email)
+  status TEXT NOT NULL DEFAULT 'pending', sent_at BIGINT, reminded_at BIGINT, UNIQUE(session_id, email)
 );
 CREATE TABLE IF NOT EXISTS reports (
   id TEXT PRIMARY KEY, quiz_id TEXT NOT NULL REFERENCES quizzes(id), user_id TEXT NOT NULL REFERENCES users(id),
@@ -70,12 +70,17 @@ CREATE TABLE IF NOT EXISTS feedback (
   id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), receipt_email TEXT NOT NULL, category TEXT NOT NULL,
   message TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'open', created_at BIGINT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS quiz_drafts (
+  id TEXT PRIMARY KEY, owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  title TEXT NOT NULL, payload TEXT NOT NULL, updated_at BIGINT NOT NULL
+);
 CREATE INDEX IF NOT EXISTS participation_user ON participations(user_id);
+CREATE INDEX IF NOT EXISTS drafts_owner ON quiz_drafts(owner_id,updated_at);
 CREATE INDEX IF NOT EXISTS tokens_expiry ON auth_tokens(expires_at);
 CREATE INDEX IF NOT EXISTS oauth_expiry ON oauth_requests(expires_at);
 `;
 
-export async function openDatabase({ url = process.env.DATABASE_URL, filename = resolve('data', 'tufurayi.sqlite') } = {}) {
+export async function openDatabase({ url = process.env.DATABASE_URL, filename = resolve(process.env.DATA_DIR || 'data', 'tufurayi.sqlite') } = {}) {
   let pool, sqlite;
   if (url) {
     pool = new pg.Pool({ connectionString: url });
@@ -88,6 +93,11 @@ export async function openDatabase({ url = process.env.DATABASE_URL, filename = 
     const feedbackColumns = await pool.query("SELECT column_name FROM information_schema.columns WHERE table_name='feedback'");
     if (!feedbackColumns.rows.some(row => row.column_name === 'receipt_email'))
       await pool.query("ALTER TABLE feedback ADD COLUMN receipt_email TEXT NOT NULL DEFAULT ''");
+    const invitationColumns = await pool.query("SELECT column_name FROM information_schema.columns WHERE table_name='invitations'");
+    const existingInvitations = new Set(invitationColumns.rows.map(row => row.column_name));
+    for (const column of ['sent_at', 'reminded_at']) {
+      if (!existingInvitations.has(column)) await pool.query(`ALTER TABLE invitations ADD COLUMN ${column} BIGINT`);
+    }
   } else {
     if (filename !== ':memory:') await mkdir(dirname(filename), { recursive: true });
     sqlite = new DatabaseSync(filename);
@@ -100,6 +110,10 @@ export async function openDatabase({ url = process.env.DATABASE_URL, filename = 
     const feedbackColumns = new Set(sqlite.prepare('PRAGMA table_info(feedback)').all().map(row => row.name));
     if (!feedbackColumns.has('receipt_email'))
       sqlite.exec("ALTER TABLE feedback ADD COLUMN receipt_email TEXT NOT NULL DEFAULT ''");
+    const invitationColumns = new Set(sqlite.prepare('PRAGMA table_info(invitations)').all().map(row => row.name));
+    for (const column of ['sent_at', 'reminded_at']) {
+      if (!invitationColumns.has(column)) sqlite.exec(`ALTER TABLE invitations ADD COLUMN ${column} BIGINT`);
+    }
   }
   const makeQuery = (client) => async (sql, values = []) => {
     if (pool) {

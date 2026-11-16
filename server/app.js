@@ -14,6 +14,9 @@ import { quizScore } from './scores.js';
 
 z.config(z.locales.fr());
 
+const quizCategories = ['Culture générale', 'Sciences', 'Technologie', 'Histoire', 'Géographie', 'Sport',
+  'Langues', 'Arts et littérature', 'Économie', 'Environnement', 'Santé', 'Mathématiques',
+  'Philosophie', 'Éducation civique', 'Agriculture', 'Musique', 'Entrepreneuriat'];
 const questionSchema = z.object({
   text: z.string().trim().min(3, 'L’énoncé doit contenir au moins 3 caractères.').max(1000), explanation: z.string().max(2000).default(''),
   duration: z.number().int().min(5).max(120),
@@ -24,10 +27,24 @@ const questionSchema = z.object({
   .refine(q => Boolean(q.mediaUrl) === Boolean(q.mediaType), 'Le média de la question est incomplet.');
 const quizSchema = z.object({
   title: z.string().trim().min(3, 'Le titre du quiz doit contenir au moins 3 caractères.').max(100), description: z.string().max(1000).default(''),
-  category: z.enum(['Culture générale', 'Sciences', 'Technologie', 'Histoire', 'Géographie', 'Sport']),
+  category: z.enum(quizCategories),
   cover: z.enum(['violet', 'blue', 'orange', 'green', 'pink', 'navy']).default('violet'),
-  visibility: z.enum(['public', 'private', 'invitation']), published: z.boolean(),
+  visibility: z.enum(['public', 'private', 'invitation']), published: z.boolean(), draftId: z.uuid().optional(),
   questions: z.array(questionSchema).min(1).max(50)
+});
+const draftSchema = z.object({
+  quizId: z.uuid().nullable().optional(),
+  title: z.string().max(100).default(''), description: z.string().max(1000).default(''),
+  category: z.enum(quizCategories).default('Culture générale'),
+  cover: z.enum(['violet', 'blue', 'orange', 'green', 'pink', 'navy']).default('violet'),
+  visibility: z.enum(['public', 'private', 'invitation']).default('public'), published: z.boolean().default(true),
+  questions: z.array(z.object({
+    text: z.string().max(1000).default(''), explanation: z.string().max(2000).default(''),
+    duration: z.number().int().min(5).max(120).default(20),
+    mediaUrl: z.string().regex(/^\/media\/[0-9a-f-]{36}\.(jpg|png|gif|webp|mp4|webm|mp3|wav|ogg|m4a|aac)$/).nullable().optional(),
+    mediaType: z.enum(['image', 'video', 'audio']).nullable().optional(),
+    answers: z.array(z.object({ text: z.string().max(500).default(''), correct: z.boolean().default(false) })).max(6).default([])
+  })).max(50).default([])
 });
 const creator = (req, _res, next) => {
   try { assert(['creator', 'admin'].includes(req.user.role), 403, 'Un compte créateur est nécessaire.'); next(); } catch (e) { next(e); }
@@ -38,10 +55,55 @@ const admin = (req, _res, next) => {
 
 export function createApp(db, secret, options = {}) {
   const app = express();
-  const mediaDir = resolve(options.mediaDir || 'data/media');
+  const mediaDir = resolve(options.mediaDir || process.env.MEDIA_DIR || resolve(process.env.DATA_DIR || 'data', 'media'));
   const auth = createAuth(db, secret, options);
   const game = createGame(db, options);
   let notify = async () => {};
+  async function sendPendingInvitations(sessionId) {
+    const invitations = await db.query(`SELECT i.id,i.email,s.id AS session_id,s.mode,s.opens_at,q.title,q.visibility,q.invitation_code
+      FROM invitations i JOIN sessions s ON s.id=i.session_id JOIN quizzes q ON q.id=s.quiz_id
+      WHERE i.session_id=? AND i.sent_at IS NULL ORDER BY i.email`, [sessionId]);
+    let sent = 0, failed = 0;
+    for (const invitation of invitations) {
+      try {
+        await auth.sendSessionInvitation(invitation.email, { id: invitation.session_id, mode: invitation.mode,
+          opens_at: invitation.opens_at, title: invitation.title, visibility: invitation.visibility,
+          invitation_code: invitation.invitation_code });
+        await db.query('UPDATE invitations SET sent_at=? WHERE id=? AND sent_at IS NULL', [Date.now(), invitation.id]);
+        sent++;
+      } catch (error) {
+        console.error(`Échec d’envoi de l’invitation à ${invitation.email} pour la session ${sessionId} :`, error);
+        failed++;
+      }
+    }
+    return { sent, failed };
+  }
+  async function sendDueReminders(now = Date.now()) {
+    const staleClaim = -(now - 15 * 60000);
+    const due = await db.query(`SELECT i.id,i.email,s.id AS session_id,s.mode,s.opens_at,q.title,q.visibility,q.invitation_code
+      FROM invitations i JOIN sessions s ON s.id=i.session_id JOIN quizzes q ON q.id=s.quiz_id
+      WHERE i.sent_at IS NOT NULL AND (i.reminded_at IS NULL OR i.reminded_at<?) AND s.opens_at>? AND s.opens_at<=?`,
+    [staleClaim, now, now + 86400000]);
+    for (const invitation of due) {
+      const claimed = await db.transaction(async tx => {
+        const [row] = await tx.query(`SELECT id FROM invitations WHERE id=? AND (reminded_at IS NULL OR reminded_at<?)${tx.lock}`,
+          [invitation.id, staleClaim]);
+        if (!row) return false;
+        await tx.query('UPDATE invitations SET reminded_at=? WHERE id=?', [-now, invitation.id]);
+        return true;
+      });
+      if (!claimed) continue;
+      try {
+        await auth.sendSessionInvitation(invitation.email, { id: invitation.session_id, mode: invitation.mode,
+          opens_at: invitation.opens_at, title: invitation.title, visibility: invitation.visibility,
+          invitation_code: invitation.invitation_code }, true);
+        await db.query('UPDATE invitations SET reminded_at=? WHERE id=? AND reminded_at=?', [Date.now(), invitation.id, -now]);
+      } catch (error) {
+        await db.query('UPDATE invitations SET reminded_at=NULL WHERE id=? AND reminded_at=?', [invitation.id, -now]);
+        console.error(`Échec d’envoi du rappel à ${invitation.email} pour la session ${invitation.session_id} :`, error);
+      }
+    }
+  }
   app.disable('x-powered-by');
   app.use(helmet({ contentSecurityPolicy: { directives: { 'script-src': ["'self'"], 'img-src': ["'self'", 'data:'], 'connect-src': ["'self'"] } } }));
   app.use('/media', express.static(mediaDir, { dotfiles: 'deny', index: false, immutable: true, maxAge: '1y',
@@ -85,6 +147,8 @@ export function createApp(db, secret, options = {}) {
       const rows = await tx.query(`SELECT p.id,p.session_id,p.score,p.status,p.finished_at,q.title,q.category,s.mode,
         s.status AS session_status,s.question_order,s.current_index,
         CASE WHEN EXISTS (SELECT 1 FROM session_exclusions e WHERE e.session_id=s.id AND e.user_id=p.user_id) THEN 1 ELSE 0 END AS excluded,
+        (SELECT COUNT(*) FROM participation_answers pa WHERE pa.participation_id=p.id) AS answer_count,
+        (SELECT COUNT(*) FROM participation_answers pa WHERE pa.participation_id=p.id AND pa.points>0) AS correct_count,
         (SELECT COUNT(*) FROM questions WHERE quiz_id=q.id) AS question_count
         FROM participations p JOIN sessions s ON s.id=p.session_id JOIN quizzes q ON q.id=s.quiz_id
         WHERE p.user_id=? ORDER BY COALESCE(p.finished_at,s.created_at) DESC${tx.lock ? ' FOR UPDATE OF s,p' : ''}`, [req.user.id]);
@@ -101,6 +165,35 @@ export function createApp(db, secret, options = {}) {
       return rows;
     });
     res.json(history);
+  });
+  app.get('/api/drafts', creator, async (req, res) => {
+    const drafts = await db.query('SELECT id,title,payload,updated_at FROM quiz_drafts WHERE owner_id=? ORDER BY updated_at DESC', [req.user.id]);
+    res.json(drafts.map(draft => ({ ...draft, payload: JSON.parse(draft.payload) })));
+  });
+  app.post('/api/drafts', creator, async (req, res) => {
+    const payload = draftSchema.parse(req.body);
+    const id = randomUUID();
+    const updatedAt = Date.now();
+    await db.query('INSERT INTO quiz_drafts (id,owner_id,title,payload,updated_at) VALUES (?,?,?,?,?)',
+      [id, req.user.id, payload.title, JSON.stringify(payload), updatedAt]);
+    res.status(201).json({ id, updatedAt });
+  });
+  app.put('/api/drafts/:id', creator, async (req, res) => {
+    const id = z.uuid().parse(req.params.id);
+    const payload = draftSchema.parse(req.body);
+    const [draft] = await db.query('SELECT id FROM quiz_drafts WHERE id=? AND owner_id=?', [id, req.user.id]);
+    assert(draft, 404, 'Brouillon introuvable.');
+    const updatedAt = Date.now();
+    await db.query('UPDATE quiz_drafts SET title=?,payload=?,updated_at=? WHERE id=? AND owner_id=?',
+      [payload.title, JSON.stringify(payload), updatedAt, id, req.user.id]);
+    res.json({ id, updatedAt });
+  });
+  app.delete('/api/drafts/:id', creator, async (req, res) => {
+    const id = z.uuid().parse(req.params.id);
+    const [draft] = await db.query('SELECT id FROM quiz_drafts WHERE id=? AND owner_id=?', [id, req.user.id]);
+    assert(draft, 404, 'Brouillon introuvable.');
+    await db.query('DELETE FROM quiz_drafts WHERE id=? AND owner_id=?', [id, req.user.id]);
+    res.status(204).end();
   });
   app.get('/api/leaderboard', async (_req, res) => res.json(await db.query(`SELECT u.id,u.pseudo,u.avatar,
     COALESCE(SUM(ROUND(1.0*p.score/(SELECT COUNT(*) FROM questions WHERE quiz_id=s.quiz_id),0)),0) AS score,COUNT(p.id) AS games FROM users u
@@ -142,6 +235,10 @@ export function createApp(db, secret, options = {}) {
     const input = quizSchema.parse(req.body);
     const id = req.params.id || randomUUID();
     await db.transaction(async tx => {
+      if (input.draftId) {
+        const [draft] = await tx.query('SELECT id FROM quiz_drafts WHERE id=? AND owner_id=?', [input.draftId, req.user.id]);
+        assert(draft, 404, 'Brouillon introuvable.');
+      }
       if (req.params.id) {
         const [q] = await tx.query(`SELECT * FROM quizzes WHERE id=?${tx.lock}`, [id]);
         assert(q && (q.owner_id === req.user.id || req.user.role === 'admin'), 403, 'Vous ne pouvez pas modifier ce quiz.');
@@ -158,6 +255,7 @@ export function createApp(db, secret, options = {}) {
         for (const a of q.answers) await tx.query('INSERT INTO answers (id,question_id,text,correct) VALUES (?,?,?,?)',
           [randomUUID(), qId, a.text, Number(a.correct)]);
       }
+      if (input.draftId) await tx.query('DELETE FROM quiz_drafts WHERE id=? AND owner_id=?', [input.draftId, req.user.id]);
     });
     res.status(req.params.id ? 200 : 201).json({ id });
   }
@@ -241,9 +339,16 @@ export function createApp(db, secret, options = {}) {
         [id, q.id, input.mode, input.opensAt, input.closesAt, JSON.stringify(shuffle(questions.map(q => q.id))), Date.now()]);
       for (const email of new Set(input.emails)) await tx.query('INSERT INTO invitations (id,session_id,email) VALUES (?,?,?)', [randomUUID(), id, email]);
     });
-    res.status(201).json({ id });
+    const notifications = await sendPendingInvitations(id);
+    res.status(201).json({ id, notifications });
   });
   const getId = req => z.uuid().parse(req.params.id);
+  app.post('/api/sessions/:id/invitations/resend', creator, async (req, res) => {
+    const id = getId(req);
+    const [session] = await db.query('SELECT q.owner_id FROM sessions s JOIN quizzes q ON q.id=s.quiz_id WHERE s.id=?', [id]);
+    assert(session && (session.owner_id === req.user.id || req.user.role === 'admin'), 403, 'Vous ne pouvez pas gérer les invitations de cette session.');
+    res.json(await sendPendingInvitations(id));
+  });
   app.get('/api/sessions/:id/access', admin, async (req, res) => res.json(await game.accessRequests(getId(req), req.user)));
   app.post('/api/sessions/:id/access', admin, async (req, res) => {
     const { email, approved } = z.object({ email: emailSchema, approved: z.boolean() }).parse(req.body);
@@ -382,5 +487,5 @@ export function createApp(db, secret, options = {}) {
     res.status(error.status || 500).json({ error: error.status ? error.message : 'Une erreur serveur est survenue. Réessayez.',
       ...(error.code === 'SESSION_UNAUTHORIZED' || error.code === 'SESSION_EXCLUDED' ? { code: error.code } : {}) });
   });
-  return { app, auth, game, setNotify(fn) { notify = fn; } };
+  return { app, auth, game, sendDueReminders, setNotify(fn) { notify = fn; } };
 }

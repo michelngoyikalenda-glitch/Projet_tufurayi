@@ -18,9 +18,9 @@ export function HistoryPage({ history, open }: { history: History[]; open: (id: 
   return <><div className="page-heading"><div><div className="eyebrow dark">CHAQUE DÉFI COMPTE</div><h1>Votre parcours</h1><p>Vos résultats, vos découvertes et les quiz à reprendre.</p></div></div>
     {error && <div className="alert error" role="alert">{error}</div>}
     {!history.length ? <Empty title="Votre histoire commence maintenant" text="Jouez votre premier quiz pour retrouver ici vos résultats et votre progression." /> :
-      <section className="panel table-scroll"><table><thead><tr><th>Quiz</th><th>Mode</th><th>Score</th><th>Progression</th><th>Date</th><th>Résultats</th></tr></thead><tbody>{history.map(h => <tr key={h.id}>
+      <section className="panel table-scroll"><table><thead><tr><th>Quiz</th><th>Mode</th><th>Score</th><th>Réponses justes</th><th>Progression</th><th>Date</th><th>Résultats</th></tr></thead><tbody>{history.map(h => <tr key={h.id}>
         <td><strong>{h.title}</strong><small className="table-small">{h.category}</small></td><td><span className="tag">{h.mode === 'live' ? 'En direct' : 'À votre rythme'}</span></td>
-        <td><strong>{number(h.score)}</strong><small> / {number(1000)}</small></td><td><span className={`status ${h.status === 'finished' ? 'done' : ''}`}>{h.status === 'finished' ? 'Terminé' : 'En cours'}</span></td>
+        <td><strong>{number(h.score)}</strong><small> / {number(1000)}</small></td><td>{number(h.correct_count)} / {number(h.answer_count)}</td><td><span className={`status ${h.status === 'finished' ? 'done' : ''}`}>{h.status === 'finished' ? 'Terminé' : 'En cours'}</span></td>
         <td>{h.finished_at ? date(h.finished_at) : '—'}</td><td>{h.excluded ? <span>Exclu — résultats conservés</span> : <div className="report-actions"><button className="text-button" onClick={() => open(h.session_id)}>{h.status === 'finished' ? 'Résultats' : 'Reprendre'}<ArrowUpRight size={16} /></button>
           {h.status === 'finished' && <button className="text-button" disabled={downloading !== ''} onClick={() => void download(h.session_id)}><Download size={16} />{downloading === h.session_id ? 'Préparation…' : 'Télécharger mes notes'}</button>}</div>}</td>
       </tr>)}</tbody></table></section>}
@@ -45,6 +45,8 @@ export function ProfilePage({ user, history, update }: { user: User; history: Hi
   const [busy, setBusy] = useState(false);
   const finished = history.filter(h => h.status === 'finished');
   const score = finished.reduce((n, h) => n + Number(h.score), 0);
+  const answers = history.reduce((n, h) => n + Number(h.answer_count || 0), 0);
+  const correct = history.reduce((n, h) => n + Number(h.correct_count || 0), 0);
   async function save(e: FormEvent) {
     e.preventDefault(); setBusy(true); setError(''); setSuccess(false);
     try { update(await api<User>('/me', 'PUT', { pseudo, avatar })); setSuccess(true); }
@@ -60,7 +62,9 @@ export function ProfilePage({ user, history, update }: { user: User; history: Hi
         <label>Couleur de votre avatar</label><div className="avatar-picker">{[['indigo', 'indigo'], ['green', 'vert'], ['orange', 'orange'], ['pink', 'rose'], ['blue', 'bleu']].map(([c, label]) => <button key={c} type="button" aria-label={`Avatar ${label}`} aria-pressed={avatar === c} onClick={() => setAvatar(c)} className={avatar === c ? 'active' : ''}><Avatar user={{ pseudo, avatar: c }} /></button>)}</div>
         {error && <div className="alert error">{error}</div>}{success && <div className="alert success" role="status">Votre profil a été mis à jour.</div>}
         <button className="button orange" disabled={busy}><Save size={16} />{busy ? 'Enregistrement…' : 'Enregistrer les modifications'}</button></form>
-    </section><div><div className="profile-stats"><div className="panel"><Trophy size={23} /><strong>{number(score)}</strong><span>points accumulés</span></div><div className="panel"><Clock3 size={23} /><strong>{finished.length}</strong><span>quiz terminés</span></div></div>
+    </section><div><div className="profile-stats"><div className="panel"><Trophy size={23} /><strong>{number(score)}</strong><span>points accumulés</span></div><div className="panel"><Clock3 size={23} /><strong>{finished.length}</strong><span>quiz terminés</span></div>
+      <div className="panel"><Medal size={23} /><strong>{finished.length ? number(Math.round(score / finished.length)) : '—'}</strong><span>score moyen</span></div>
+      <div className="panel"><Target size={23} /><strong>{answers ? `${Math.round(correct / answers * 100)} %` : '—'}</strong><span>de bonnes réponses</span></div></div>
       <section className="panel badges"><h3>Vos petites grandes victoires</h3>{badges.map(b => <div key={b.title} className={b.earned ? 'earned' : 'locked'}><span><b.icon size={24} /></span><div><strong>{b.title}</strong><small>{b.text}</small></div>{b.earned && <Check size={18} />}</div>)}</section></div></div>
   </>;
 }

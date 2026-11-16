@@ -46,7 +46,7 @@ Sur un autre appareil du même réseau, remplacez `localhost` par l’IP du PC e
 - Bouton œil pour afficher ou masquer le mot de passe à la connexion, à l’inscription et à la réinitialisation ; le mot de passe est masqué par défaut.
 - Access JWT de 15 minutes, refresh token de 7 jours dans un cookie HttpOnly, rotation des refresh tokens, révocation après changement du mot de passe ou des accès.
 - Tableau de bord personnel, recherche/catégories, invitations, reprise et historique.
-- Éditeur de 1 à 50 questions, 2 à 6 réponses, une seule bonne réponse, 5 à 120 secondes par question ; publication/brouillon, duplication.
+- Éditeur de 1 à 50 questions, 2 à 6 réponses, une seule bonne réponse, 5 à 120 secondes par question ; publication/brouillon, duplication et brouillons sauvegardés automatiquement, repris depuis le compte et supprimés après enregistrement du quiz. Catégories : culture générale, sciences, technologie, histoire, géographie, sport, langues, arts et littérature, économie, environnement, santé, mathématiques, philosophie, éducation civique, agriculture, musique et entrepreneuriat.
 - Pour chaque question, import d’une image, d’une vidéo ou d’un audio (25 Mo maximum) ; le média est conservé avec le quiz et diffusé aux joueurs pendant la partie.
 - Avant l’enregistrement, toutes les questions sont vérifiées, y compris les onglets masqués. Les champs à compléter sont listés avec leur numéro de question/réponse, les onglets concernés sont signalés et le premier champ invalide reçoit le focus.
 - Quiz publics, privés sur liste d’emails, ou accessibles par code/liste d’emails. **Dans toutes les salles, y compris publiques et en développement, l’autorisation explicite d’un administrateur pour chaque joueur est obligatoire.** Ni un lien, ni un code, ni une invitation, ni une ancienne participation ne remplacent cette approbation. L’animateur de la salle et les administrateurs gardent leur accès de gestion.
@@ -56,7 +56,8 @@ Sur un autre appareil du même réseau, remplacez `localhost` par l’IP du PC e
 - **Gérer les joueurs**, dans **Mes sessions** ou dans la salle de l’animateur, permet à l’animateur ou à un administrateur d’exclure un participant avec confirmation, même après la fin du quiz. L’exclusion est permanente pour cette session seulement : retour, questions, réponses et connexion à la salle sont bloqués. Les réponses et scores acquis sont conservés dans l’historique, les statistiques, les classements et le PDF (avec mention de l’exclusion dans le relevé). Une partie en cours est arrêtée pour ce joueur. Son compte et ses autres sessions ne sont pas suspendus.
 - Direct : salle d’attente, lancement et questions synchronisés, classement après chaque timer, correction finale.
 - Différé : plage d’ouverture, ordre des questions mélangé par joueur, sauvegarde de progression et correction après chaque réponse.
-- Une participation par utilisateur/session, une réponse par question ; reconnexion au même état. Le timer continue pendant la déconnexion.
+- Une participation par utilisateur/session, une réponse par question ; reconnexion au même état. Le timer continue pendant la déconnexion ; la salle signale l’état hors ligne et relance la connexion quand le réseau revient.
+- Invitations email lors de la planification, bouton de nouvel essai en cas d’échec et rappel automatique dans les 24 heures avant l’ouverture. Le profil présente le score moyen et le taux de bonnes réponses, et l’historique détaille les bonnes réponses de chaque partie.
 - Chaque quiz est noté sur **1 000 points au total**, quel que soit le nombre de questions. Le serveur divise le total brut des réponses par le nombre de questions, puis arrondit à l’entier. Une réponse correcte dans le temps rapporte de 500 à 1 000 points bruts selon la rapidité ; réponse erronée ou hors délai : 0. Les points affichés par question sont les contributions au total sur 1 000, avec répartition des arrondis. En direct, ils ne sont exposés qu’après le timer. Les anciens résultats sont convertis à la lecture sans modifier les données enregistrées. Le classement général et les badges utilisent le cumul de ces notes, qui peut dépasser 1 000 pour plusieurs quiz.
 - Statistiques par question et par joueur ; badges personnels calculés à partir des résultats.
 - Classement général des scores cumulés des sessions terminées.
@@ -95,7 +96,8 @@ Ne réutilisez pas les mots de passe d’exemple. Encodez les caractères spéci
 
 ## Emails et production
 
-En local, les liens de vérification/réinitialisation sont affichés **dans le terminal du serveur**, pas dans la réponse API. Configurez `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS` et `MAIL_FROM` pour envoyer de vrais emails. Les invitations sont affichées dans l’application, sans notification email dédiée.
+En local, les liens de vérification/réinitialisation sont affichés **dans le terminal du serveur**, pas dans la réponse API. Configurez `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS` et `MAIL_FROM` pour envoyer de vrais emails.
+Les adresses saisies à la planification reçoivent désormais un lien de session par email ; un rappel est envoyé dans les 24 heures précédant l’ouverture. En cas d’échec, la session reste créée et l’animateur peut relancer l’envoi depuis la fenêtre de planification. En développement sans SMTP, les messages apparaissent dans le terminal.
 
 ## Connexion Google et Apple
 
@@ -123,11 +125,11 @@ En production :
 2. Exécuter `npm run build`, puis `npm start` : Express sert l’interface compilée et l’API sur le même domaine.
 3. Placer un reverse proxy HTTPS devant le serveur, avec support WebSocket. Les cookies sont `Secure` en production.
 4. Ne pas initialiser les comptes de démonstration ni déployer une base qui les contient. Créer un compte vérifié et lui attribuer le rôle administrateur par une opération contrôlée en base. Avec `NODE_ENV=production`, chaque inscription publique crée uniquement un joueur ; une demande du rôle créateur ou administrateur est rejetée par l’API. Un administrateur attribue ensuite les rôles depuis **Administration → Utilisateurs**. Les comptes créateurs et administrateurs autorisés conservent leurs fonctions ; les joueurs ne voient pas les menus, boutons ou fenêtres de création et d’administration. Les contrôles serveur s’appliquent aussi aux anciens créateurs rétrogradés en joueurs.
-5. Sauvegarder PostgreSQL, limiter l’exposition réseau et ajouter une politique de rétention/supervision adaptée. Adapter explicitement `trust proxy` au proxy réel avant d’utiliser une limitation par IP derrière celui-ci.
+5. Monter un disque persistant et définir `DATA_DIR` vers son chemin de montage (par exemple `/app/data` sur Railway ou `/var/data` sur Render). SQLite (si utilisé), le secret local et les médias restent dans ce répertoire ; `MEDIA_DIR` peut remplacer le chemin des médias. Le système de fichiers du conteneur seul n’est pas persistant. Le stockage de médias local convient à une seule instance ; pour multiplier les instances, externaliser les médias vers un stockage objet. En production, préférer PostgreSQL géré et activer ses sauvegardes automatiques ; sauvegarder aussi le volume média et tester la restauration. Limiter l’exposition réseau. Adapter explicitement `trust proxy` au proxy réel avant d’utiliser une limitation par IP derrière celui-ci.
 
 Sans secret configuré en développement, le serveur génère un secret dans `data/auth-secret`. Ne jamais publier ce fichier, `.env` ou les données de comptes.
 
-OAuth Microsoft, avatars téléversés vers S3/Cloudinary, équipes/groupes et notifications email d’invitation ne sont **pas implémentés**. Le MVP fixe une tentative par session. Les badges sont calculés, sans table de récompenses indépendante. Cette base nécessite une qualification de déploiement avant une utilisation publique.
+OAuth Microsoft, avatars téléversés vers S3/Cloudinary et équipes/groupes ne sont **pas implémentés**. Le MVP fixe une tentative par session. Les badges sont calculés, sans table de récompenses indépendante. Avant une ouverture publique, vérifier les sauvegardes/restaurations, la délivrabilité des emails et la persistance du disque de médias.
 
 ## Vérifications
 

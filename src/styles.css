@@ -489,7 +489,7 @@ td select,
   border: 0;
   border-radius: 18px 18px 0 0;
   color: #fff;
-  background: linear-gradient(125deg, #102447, #17345b 65%, #10284d);
+  background: linear-gradient(125deg, #0f766e, #0d9488 65%, #115e59);
   line-height: 1.5;
 }
 .contact-footer-main {
@@ -508,13 +508,13 @@ td select,
 .contact-footer-intro p,
 .contact-footer-details p {
   margin-top: 14px;
-  color: #d6e0ef;
+  color: #d9fffa;
   font-size: 13px;
   line-height: 1.6;
 }
 .contact-footer-intro p { max-width: 270px; }
 .contact-footer-eyebrow {
-  color: #ffbf88;
+  color: #a7f3e8;
   font-size: 10px;
   font-weight: 800;
   letter-spacing: .1em;
@@ -550,7 +550,7 @@ td select,
   transition: background .2s, border-color .2s;
 }
 .contact-footer-link:hover { border-color: #ffffff80; background: #ffffff1c; }
-.contact-footer-link:focus-visible { outline: 3px solid #ffbf88; outline-offset: 3px; }
+.contact-footer-link:focus-visible { outline: 3px solid #99f6e4; outline-offset: 3px; }
 .contact-footer-icon {
   display: grid;
   flex: 0 0 38px;
@@ -566,19 +566,19 @@ td select,
 .contact-footer-icon.email img { transform: scale(1.3); }
 .contact-footer-link-text { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 2px; }
 .contact-footer-link-text strong { color: #fff; font-size: 13px; }
-.contact-footer-link-text small { color: #dce6f3; font-size: 12px; overflow-wrap: anywhere; }
-.contact-footer-arrow { flex: 0 0 auto; color: #ffbf88; }
+.contact-footer-link-text small { color: #d9fffa; font-size: 12px; overflow-wrap: anywhere; }
+.contact-footer-arrow { flex: 0 0 auto; color: #99f6e4; }
 .contact-footer-bottom {
   display: flex;
   flex-direction: column;
   gap: 12px;
   padding: 15px 36px;
   border-top: 1px solid #ffffff26;
-  color: #c2d0e2;
+  color: #c9fff8;
   font-size: 11px;
 }
 .contact-footer-taglines { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px 20px; }
-.contact-footer-copyright { padding-top: 12px; border-top: 1px solid #ffffff1a; color: #dce6f3; text-align: center; }
+.contact-footer-copyright { padding-top: 12px; border-top: 1px solid #ffffff26; color: #d9fffa; text-align: center; }
 @media(max-width: 700px) {
   .contact-footer-main { grid-template-columns: 1fr; gap: 24px; padding: 28px 22px; }
   .contact-footer-bottom { padding: 15px 22px; }
@@ -794,3 +794,14 @@ h1, h2, h3, h4, p, label, small, .alert, .board-name, .card-footer > span,
 .question-media audio { width: min(100%, 560px); }
 .game-question-media { display: block; width: min(100%, 680px); max-height: 420px; margin: 20px auto; object-fit: contain; border-radius: 12px; background: #0b1220; }
 .game-question-media audio { width: min(100%, 560px); }
+@media(max-width:720px) {
+  .game-toolbar { align-items: flex-start; }
+  .game-toolbar .connection { flex-basis: 100%; line-height: 1.5; }
+}
+.profile-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.profile-stats > .panel { min-width: 0; }
+.editor-drafts { display: grid; gap: 8px; margin-bottom: 4px; }
+.editor-drafts p { margin: 0; color: var(--muted); font-size: 13px; }
+.editor-drafts .text-button { justify-content: flex-start; text-align: left; }
+.landing-categories button .category-tile svg,
+.category-filters button svg { color: #263445; }

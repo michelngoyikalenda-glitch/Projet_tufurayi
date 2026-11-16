@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
-import { X, ArrowUpRight, Clock3, Users, Radio, Globe2, Atom, Landmark, Code2, Trophy, Sparkles, Shapes, MessageSquareWarning, Send } from 'lucide-react';
+import { X, ArrowUpRight, Clock3, Users, Radio, Globe2, Atom, Landmark, Code2, Trophy, Sparkles, Shapes, MessageSquareWarning, Send, Languages, BookOpen, BriefcaseBusiness, Leaf, HeartPulse, Calculator, Brain, Scale, Sprout, Music2, Lightbulb } from 'lucide-react';
 import type { Session, User, Quiz, BoardEntry } from './types';
 import { api, date, message, number } from './api';
 import { PrizeShowcase } from './PrizeShowcase';
@@ -85,10 +85,17 @@ export function Footer({ user, onLogin }: { user?: User | null; onLogin?: () => 
     </Modal>}
   </footer>;
 }
-export const categories = ['Culture générale', 'Sciences', 'Technologie', 'Histoire', 'Géographie', 'Sport'];
+export const categories = ['Culture générale', 'Sciences', 'Technologie', 'Histoire', 'Géographie', 'Sport',
+  'Langues', 'Arts et littérature', 'Économie', 'Environnement', 'Santé', 'Mathématiques',
+  'Philosophie', 'Éducation civique', 'Agriculture', 'Musique', 'Entrepreneuriat'];
 export function CategoryIcon({ category, size = 26 }: { category: string; size?: number }) {
   const Icon = category === 'Sciences' ? Atom : category === 'Géographie' ? Globe2 : category === 'Histoire' ? Landmark :
-    category === 'Technologie' ? Code2 : category === 'Sport' ? Trophy : Shapes;
+    category === 'Technologie' ? Code2 : category === 'Sport' ? Trophy : category === 'Langues' ? Languages :
+      category === 'Arts et littérature' ? BookOpen : category === 'Économie' ? BriefcaseBusiness :
+        category === 'Environnement' ? Leaf : category === 'Santé' ? HeartPulse :
+          category === 'Mathématiques' ? Calculator : category === 'Philosophie' ? Brain :
+            category === 'Éducation civique' ? Scale : category === 'Agriculture' ? Sprout :
+              category === 'Musique' ? Music2 : category === 'Entrepreneuriat' ? Lightbulb : Shapes;
   return <Icon size={size} strokeWidth={1.6} />;
 }
 export function Avatar({ user, size = '' }: { user: Pick<User, 'pseudo' | 'avatar'>; size?: string }) {

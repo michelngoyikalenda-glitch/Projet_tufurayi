@@ -101,11 +101,21 @@ const timer = setInterval(async () => {
   catch (error) { console.error('Moteur temps réel :', error); }
   finally { ticking = false; }
 }, 500);
+let reminding = false;
+async function reminders() {
+  if (reminding) return;
+  reminding = true;
+  try { await service.sendDueReminders(); }
+  catch (error) { console.error('Rappels email :', error); }
+  finally { reminding = false; }
+}
+void reminders();
+const reminderTimer = setInterval(reminders, 60000);
 server.listen(Number(process.env.PORT || 3001), '0.0.0.0', () => {
   console.info(`Tufurayi API : http://localhost:${server.address().port} (${process.env.DATABASE_URL ? 'PostgreSQL' : 'SQLite local'})`);
 });
 async function shutdown() {
-  clearInterval(timer);
+  clearInterval(timer); clearInterval(reminderTimer);
   await new Promise(resolve => io.close(resolve));
   if (pub) await Promise.all([pub.quit(), sub.quit()]);
   await db.close();

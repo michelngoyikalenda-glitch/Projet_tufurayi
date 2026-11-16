@@ -1,11 +1,45 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { createServer as createHttpServer } from 'node:http';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { createServer as createViteServer } from 'vite';
 import { openDatabase } from '../server/db.js';
 import { createApp } from '../server/app.js';
+import { getSecret } from '../server/auth.js';
+
+test('DATA_DIR : base, médias et secret utilisent le disque persistant configuré', async () => {
+  const previous = { data: process.env.DATA_DIR, secret: process.env.JWT_SECRET, environment: process.env.NODE_ENV };
+  const folder = await mkdtemp(join(tmpdir(), 'tufurayi-data-'));
+  let db, server;
+  try {
+    process.env.DATA_DIR = folder;
+    delete process.env.JWT_SECRET;
+    process.env.NODE_ENV = 'development';
+    db = await openDatabase({ url: '' });
+    assert.ok((await stat(join(folder, 'tufurayi.sqlite'))).isFile());
+    const secret = await getSecret();
+    assert.equal(await readFile(join(folder, 'auth-secret'), 'utf8'), secret);
+    await mkdir(join(folder, 'media'), { recursive: true });
+    await writeFile(join(folder, 'media', 'persisted.png'), Buffer.from([137, 80, 78, 71]));
+    const service = createApp(db, secret, { test: true });
+    server = createHttpServer(service.app);
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    const response = await fetch(`http://127.0.0.1:${server.address().port}/media/persisted.png`);
+    assert.equal(response.status, 200);
+    assert.deepEqual(Buffer.from(await response.arrayBuffer()), Buffer.from([137, 80, 78, 71]));
+  } finally {
+    if (server) await new Promise(resolve => server.close(resolve));
+    if (db) await db.close();
+    if (previous.data === undefined) delete process.env.DATA_DIR; else process.env.DATA_DIR = previous.data;
+    if (previous.secret === undefined) delete process.env.JWT_SECRET; else process.env.JWT_SECRET = previous.secret;
+    if (previous.environment === undefined) delete process.env.NODE_ENV; else process.env.NODE_ENV = previous.environment;
+    await rm(folder, { recursive: true, force: true });
+  }
+});
 
 test('production : inscriptions publiques réservées aux joueurs', async t => {
   const previous = process.env.NODE_ENV;

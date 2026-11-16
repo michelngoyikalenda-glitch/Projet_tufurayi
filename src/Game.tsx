@@ -15,6 +15,7 @@ export function Game({ id, user, exit, complete, invitationCode }: { id: string;
   const [downloading, setDownloading] = useState(false);
   const [now, setNow] = useState(Date.now());
   const [connected, setConnected] = useState(false);
+  const [online, setOnline] = useState(() => typeof navigator === 'undefined' || navigator.onLine);
   const [copied, setCopied] = useState(false);
   const [sharing, setSharing] = useState(false);
   const [managePlayers, setManagePlayers] = useState(false);
@@ -39,6 +40,7 @@ export function Game({ id, user, exit, complete, invitationCode }: { id: string;
     };
     const refresh = async () => {
       if (denied) return;
+      if (typeof navigator !== 'undefined' && !navigator.onLine) { setConnected(false); setConnectionError(''); return; }
       try { accept(await api<GameState>(`/sessions/${id}`)); if (active) setConnectionError(''); }
       catch (e) {
         if (!active) return;
@@ -64,11 +66,19 @@ export function Game({ id, user, exit, complete, invitationCode }: { id: string;
     s.on('game:error', (e: { error: string }) => { if (active) setError(e.error); });
     for (const event of ['session:join', 'game:question', 'game:question_end', 'game:end']) s.on(event, accept);
     const reconnect = () => { if (!denied) { s.auth = { token: getToken() }; s.disconnect().connect(); } };
+    const onOnline = () => {
+      setOnline(true);
+      if (!denied) { s.auth = { token: getToken() }; if (!s.connected) s.connect(); void refresh(); }
+    };
+    const onOffline = () => { setOnline(false); setConnected(false); setConnectionError(''); };
     window.addEventListener('auth:token', reconnect);
+    window.addEventListener('online', onOnline);
+    window.addEventListener('offline', onOffline);
     s.connect(); void refresh();
     const poll = setInterval(refresh, 3000);
     const timer = setInterval(() => setNow(Date.now()), 100);
-    return () => { active = false; clearInterval(poll); clearInterval(timer); window.removeEventListener('auth:token', reconnect); s.disconnect(); socket.current = null; };
+    return () => { active = false; clearInterval(poll); clearInterval(timer); window.removeEventListener('auth:token', reconnect);
+      window.removeEventListener('online', onOnline); window.removeEventListener('offline', onOffline); s.disconnect(); socket.current = null; };
   }, [id]);
   async function action(path: string, body?: unknown) {
     setBusy(true); setError('');
@@ -98,7 +108,10 @@ export function Game({ id, user, exit, complete, invitationCode }: { id: string;
   const isPlayer = state.players.some(p => p.id === user.id);
   return <div className="game-page">
     <div className="game-toolbar"><button className="text-button quit-button" onClick={exit}><ArrowLeft size={17} />Quitter la salle</button>
-      <span className={`connection ${connected ? '' : 'offline'}`}>{connected ? <Wifi size={15} /> : <WifiOff size={15} />}{connected ? 'Connecté en temps réel' : 'Actualisation automatique'}</span></div>
+      <span className={`connection ${connected && online ? '' : 'offline'}`} role="status" aria-live="polite">
+        {connected && online ? <Wifi size={15} /> : <WifiOff size={15} />}
+        {!online ? 'Hors ligne — reprise automatique dès le retour du réseau' : connected ? 'Connecté en temps réel' : 'Reconnexion en cours — actualisation automatique'}
+      </span></div>
     <div className="page-heading"><div><div className="eyebrow dark">{state.mode === 'live' ? <Radio size={15} /> : <Clock3 size={15} />}{state.mode === 'live' ? 'QUIZ EN DIRECT' : 'À VOTRE RYTHME'}</div><h1>{state.title}</h1></div>
       <button className="button secondary" onClick={() => setSharing(open => !open)} aria-expanded={sharing}><Copy size={16} />Inviter un ami</button></div>
     {sharing && <div className="panel game-share"><label>Lien d’invitation<input readOnly value={sessionLink(id, invitationCode)} onFocus={e => e.currentTarget.select()} /></label>

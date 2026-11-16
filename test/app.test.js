@@ -677,3 +677,58 @@ test('administrateur : suppression définitive d’un joueur non autorisé', asy
   assert.equal((await request(`/sessions/${id}/join`, { method: 'POST', token: intruder.token, body: {} })).status, 403);
   assert.equal((await request('/me/history', { token: intruder.token })).body.some(h => h.session_id === id), false);
 });
+
+test('brouillons : sauvegarde, accès privé au créateur et suppression après enregistrement du quiz', async () => {
+  const draft = { quizId: null, title: 'Quiz sauvegardé automatiquement', description: 'Brouillon récupérable',
+    category: 'Sciences', cover: 'blue', visibility: 'public', published: false,
+    questions: [{ text: 'Question en cours', explanation: '', duration: 20,
+      answers: [{ text: 'Réponse', correct: true }, { text: '', correct: false }] }] };
+  let response = await request('/drafts', { method: 'POST', token: owner.token, body: draft });
+  assert.equal(response.status, 201);
+  const id = response.body.id;
+  const nonCreator = await register('BrouillonJoueur');
+  assert.equal((await request('/drafts', { token: nonCreator.token })).status, 403);
+  response = await request('/drafts', { token: owner.token });
+  assert.equal(response.body[0].id, id);
+  assert.equal(response.body[0].payload.questions[0].text, draft.questions[0].text);
+  draft.title = 'Brouillon mis à jour';
+  assert.equal((await request(`/drafts/${id}`, { method: 'PUT', token: owner.token, body: draft })).status, 200);
+  const quiz = await request('/quizzes', { method: 'POST', token: owner.token, body: { ...quizBody('public'), draftId: id } });
+  assert.equal(quiz.status, 201);
+  assert.equal((await request('/drafts', { token: owner.token })).body.some(item => item.id === id), false);
+});
+
+test('quiz : les nouvelles catégories sont acceptées et visibles dans le catalogue', async () => {
+  const body = { ...quizBody('public'), category: 'Mathématiques' };
+  const created = await request('/quizzes', { method: 'POST', token: owner.token, body });
+  assert.equal(created.status, 201);
+  const detail = await request(`/quizzes/${created.body.id}`, { token: owner.token });
+  assert.equal(detail.body.category, 'Mathématiques');
+  const catalogue = await request('/quizzes', { token: owner.token });
+  assert.equal(catalogue.status, 200);
+  assert.ok(Array.isArray(catalogue.body));
+  assert.equal(catalogue.body.find(quiz => quiz.id === created.body.id).category, 'Mathématiques');
+});
+
+test('invitations email : envoi, nouvel essai après échec et rappel unique avant ouverture', async () => {
+  const quiz = await request('/quizzes', { method: 'POST', token: owner.token, body: quizBody('invitation') });
+  assert.equal(quiz.status, 201);
+  const opening = Date.now() + 2 * 86400000;
+  const recipient = `${prefix}-mail-invite@test.fr`;
+  failEmailSend = true;
+  let response = await request('/sessions', { method: 'POST', token: owner.token,
+    body: { quizId: quiz.body.id, mode: 'live', opensAt: opening, closesAt: opening + 86400000, emails: [recipient] } });
+  failEmailSend = false;
+  assert.equal(response.status, 201);
+  assert.deepEqual(response.body.notifications, { sent: 0, failed: 1 });
+  const sessionId = response.body.id;
+  response = await request(`/sessions/${sessionId}/invitations/resend`, { method: 'POST', token: owner.token, body: {} });
+  assert.deepEqual(response.body, { sent: 1, failed: 0 });
+  const invite = mails.find(mail => mail.to === recipient);
+  const link = new URL(invite.text.match(/http\S+/)[0]);
+  assert.equal(link.searchParams.get('session'), sessionId);
+  assert.ok(link.searchParams.get('code'));
+  await service.sendDueReminders(opening - 86400000);
+  await service.sendDueReminders(opening - 86300000);
+  assert.equal(mails.filter(mail => mail.to === recipient && mail.subject.startsWith('Rappel :')).length, 1);
+});

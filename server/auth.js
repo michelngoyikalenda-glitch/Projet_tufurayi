@@ -1,5 +1,6 @@
 import { randomBytes, createHash, randomUUID, createPublicKey } from 'node:crypto';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { resolve } from 'node:path';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import nodemailer from 'nodemailer';
@@ -25,13 +26,14 @@ export async function getSecret() {
     return process.env.JWT_SECRET;
   }
   assert(process.env.NODE_ENV !== 'production', 500, 'JWT_SECRET est obligatoire en production.');
-  await mkdir('data', { recursive: true });
-  try { return await readFile('data/auth-secret', 'utf8'); }
+  const secretPath = resolve(process.env.DATA_DIR || 'data', 'auth-secret');
+  await mkdir(resolve(process.env.DATA_DIR || 'data'), { recursive: true });
+  try { return await readFile(secretPath, 'utf8'); }
   catch (error) {
     if (error.code !== 'ENOENT') throw error;
     const secret = randomBytes(48).toString('hex');
-    try { await writeFile('data/auth-secret', secret, { flag: 'wx', mode: 0o600 }); return secret; }
-    catch (writeError) { if (writeError.code === 'EEXIST') return readFile('data/auth-secret', 'utf8'); throw writeError; }
+    try { await writeFile(secretPath, secret, { flag: 'wx', mode: 0o600 }); return secret; }
+    catch (writeError) { if (writeError.code === 'EEXIST') return readFile(secretPath, 'utf8'); throw writeError; }
   }
 }
 
@@ -70,6 +72,21 @@ export function createAuth(db, secret, { mailer, origin = process.env.APP_URL ||
     }
     assert(process.env.NODE_ENV !== 'production', 503, 'Le service email n’est pas configuré.');
     console.info(`[Email local → ${recipient}] ${subject}\n${text}`);
+  }
+  async function sendSessionInvitation(recipient, session, reminder = false) {
+    const url = new URL('/', origin);
+    url.searchParams.set('session', session.id);
+    if (session.visibility === 'invitation' && session.invitation_code) url.searchParams.set('code', session.invitation_code);
+    const subject = reminder ? `Rappel : votre session Tufurayi approche — ${session.title}` : `Invitation à une session Tufurayi — ${session.title}`;
+    const text = `Bonjour,\n\n${reminder ? 'Un rappel : ' : ''}vous êtes invité(e) à participer au quiz « ${session.title} ».\n` +
+      `Mode : ${session.mode === 'live' ? 'en direct' : 'à votre rythme'}.\n` +
+      `Ouverture : ${new Date(Number(session.opens_at)).toLocaleString('fr-FR')}.\n\n` +
+      `Rejoindre la session : ${url}\n\nL’autorisation explicite d’un administrateur reste nécessaire pour participer.`;
+    if (smtp) await smtp.sendMail({ from: process.env.MAIL_FROM || 'Tufurayi <noreply@example.com>', to: recipient, subject, text });
+    else {
+      assert(process.env.NODE_ENV !== 'production', 503, 'Le service email n’est pas configuré.');
+      console.info(`[Email local → ${recipient}] ${subject}\n${text}`);
+    }
   }
   const access = user => jwt.sign({ sub: user.id, ver: user.token_version || 0 }, secret, { expiresIn: '15m', issuer: 'tufurayi', audience: 'tufurayi' });
   async function issue(res, user) {
@@ -161,7 +178,7 @@ export function createAuth(db, secret, { mailer, origin = process.env.APP_URL ||
     secure: process.env.NODE_ENV === 'production' || new URL(origin).protocol === 'https:' || provider === 'apple',
     sameSite: provider === 'apple' ? 'none' : 'lax', path: `/api/auth/oauth/${provider}/callback` });
   return {
-    authenticate, middleware, access, sendLink, sendFeedbackReceipt,
+    authenticate, middleware, access, sendLink, sendFeedbackReceipt, sendSessionInvitation,
     async register(req, res) {
       const input = z.object({ email: emailSchema, password: passwordSchema,
         pseudo: z.string().trim().min(2).max(30), role: registrationRole,
